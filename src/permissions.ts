@@ -62,8 +62,6 @@ const TOOL_CATEGORY_MAP: Record<string, ToolCategory> = {
 	"navigate-browser": "execute",
 
 	// Anthropic provider-defined tools
-	bash: "execute",
-	text_editor: "edit",
 	web_fetch: "read",
 	code_execution: "execute",
 

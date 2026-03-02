@@ -206,28 +206,6 @@ function getToolDisplay(tool: ToolExecutionProps["tool"]): ToolDisplay {
 					: null,
 			}
 		}
-		case "bash": {
-			const bashCmd = args?.command as string | undefined
-			return {
-				icon: "\u{1F4BB}",
-				label: "Bash",
-				pill: bashCmd
-					? bashCmd.length > 80
-						? bashCmd.slice(0, 77) + "\u2026"
-						: bashCmd
-					: null,
-			}
-		}
-		case "text_editor": {
-			const editorCmd = args?.command as string | undefined
-			const editorPath = args?.path as string | undefined
-			const editorShortPath = editorPath ? getShortPath(editorPath) : null
-			return {
-				icon: "\u269B\uFE0F",
-				label: editorCmd ? `Editor: ${editorCmd}` : "Text Editor",
-				pill: editorShortPath,
-			}
-		}
 		case "web_fetch": {
 			const fetchUrl = args?.url as string | undefined
 			return {

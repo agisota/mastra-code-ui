@@ -11,7 +11,7 @@ import {
 import * as path from "path"
 import * as os from "os"
 import * as fs from "fs"
-import { exec as execCallback } from "child_process"
+
 import { fileURLToPath } from "url"
 import * as pty from "node-pty"
 
@@ -631,98 +631,6 @@ async function createHarness(projectPath: string) {
 							}
 							default:
 								return `Unknown action: ${action}`
-						}
-					},
-				})
-
-				// Bash tool — run shell commands locally via Anthropic's native bash tool
-				tools.bash = anthropicProvider.tools.bash_20250124({
-					execute: async ({ command }) => {
-						return new Promise<string>((resolve) => {
-							execCallback(
-								command,
-								{
-									cwd: project.rootPath,
-									timeout: 120_000,
-									maxBuffer: 10 * 1024 * 1024,
-								},
-								(error, stdout, stderr) => {
-									if (error) {
-										resolve(
-											((stdout ?? "") + "\n" + (stderr ?? "")).trim() ||
-												error.message,
-										)
-									} else {
-										resolve(stderr ? `${stdout}\n${stderr}` : stdout)
-									}
-								},
-							)
-						})
-					},
-				})
-
-				// Text editor tool — view/edit files locally via Anthropic's native text editor tool
-				tools.text_editor = anthropicProvider.tools.textEditor_20250728({
-					execute: async ({
-						command,
-						path: filePath,
-						file_text,
-						old_str,
-						new_str,
-						insert_line,
-						insert_text,
-						view_range,
-					}) => {
-						const fullPath = path.isAbsolute(filePath)
-							? filePath
-							: path.resolve(project.rootPath, filePath)
-
-						switch (command) {
-							case "view": {
-								const content = fs.readFileSync(fullPath, "utf-8")
-								const lines = content.split("\n")
-								if (view_range) {
-									const start = (view_range[0] ?? 1) - 1
-									const end = view_range[1] ?? lines.length
-									return lines
-										.slice(start, end)
-										.map((l, i) => `${start + i + 1}\t${l}`)
-										.join("\n")
-								}
-								return lines.map((l, i) => `${i + 1}\t${l}`).join("\n")
-							}
-							case "create": {
-								fs.mkdirSync(path.dirname(fullPath), {
-									recursive: true,
-								})
-								fs.writeFileSync(fullPath, file_text ?? "")
-								return `File created: ${filePath}`
-							}
-							case "str_replace": {
-								const content = fs.readFileSync(fullPath, "utf-8")
-								if (!old_str || !content.includes(old_str)) {
-									return `Error: old_str not found in ${filePath}`
-								}
-								const count = content.split(old_str).length - 1
-								if (count > 1) {
-									return `Error: old_str appears ${count} times in ${filePath}. It must be unique.`
-								}
-								fs.writeFileSync(
-									fullPath,
-									content.replace(old_str, new_str ?? ""),
-								)
-								return `Replacement applied in ${filePath}`
-							}
-							case "insert": {
-								const content = fs.readFileSync(fullPath, "utf-8")
-								const lines = content.split("\n")
-								const lineNum = insert_line ?? 0
-								lines.splice(lineNum, 0, insert_text ?? "")
-								fs.writeFileSync(fullPath, lines.join("\n"))
-								return `Inserted text at line ${lineNum} in ${filePath}`
-							}
-							default:
-								return `Unknown command: ${command}`
 						}
 					},
 				})
