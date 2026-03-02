@@ -28,6 +28,7 @@ import { LibSQLStore } from "@mastra/libsql"
 import { Memory } from "@mastra/memory"
 import { z } from "zod"
 import { createAnthropic } from "@ai-sdk/anthropic"
+import { createGoogle } from "@ai-sdk/google"
 import { createOpenAI } from "@ai-sdk/openai"
 
 import { Harness } from "@mastra/core/harness"
@@ -63,6 +64,7 @@ import {
 	astSmartEditTool,
 	createWebSearchTool,
 	createWebExtractTool,
+	hasTavilyKey,
 	createGrepTool,
 	createGlobTool,
 	createWriteFileTool,
@@ -350,8 +352,6 @@ async function createHarness(projectPath: string) {
 	const grepTool = createGrepTool(project.rootPath)
 	const globTool = createGlobTool(project.rootPath)
 	const writeFileTool = createWriteFileTool(project.rootPath)
-	const webSearchTool = createWebSearchTool()
-	const webExtractTool = createWebExtractTool()
 
 	const subagentTool = createSubagentTool({
 		tools: {
@@ -478,11 +478,18 @@ async function createHarness(projectPath: string) {
 				tools.write_file = writeFileTool
 			}
 
-			if (webSearchTool) {
-				tools.web_search = webSearchTool
-			}
-			if (webExtractTool) {
-				tools.web_extract = webExtractTool
+			// Web search: prefer Tavily, fall back to provider-native
+			if (hasTavilyKey()) {
+				const tavily = createWebSearchTool()
+				if (tavily) tools.web_search = tavily
+				const tavilyExtract = createWebExtractTool()
+				if (tavilyExtract) tools.web_extract = tavilyExtract
+			} else if (modelId.startsWith("anthropic/")) {
+				tools.web_search = createAnthropic({}).tools.webSearch_20250305()
+			} else if (modelId.startsWith("openai/")) {
+				tools.web_search = createOpenAI({}).tools.webSearch()
+			} else if (modelId.startsWith("google/")) {
+				tools.web_search = createGoogle({}).tools.googleSearch()
 			}
 
 			const mcpTools = _mcpManager.getTools()
@@ -499,19 +506,6 @@ async function createHarness(projectPath: string) {
 	codeAgent.__registerMastra(mastra)
 
 	codeAgent.__setLogger(noopLogger)
-
-	const anthropic = createAnthropic({})
-	function getToolsets(
-		modelId: string,
-	): Record<string, Record<string, unknown>> | undefined {
-		if (webSearchTool) return undefined
-		if (!modelId.startsWith("anthropic/")) return undefined
-		return {
-			anthropic: {
-				web_search: anthropic.tools.webSearch_20250305(),
-			},
-		}
-	}
 
 	const hookManager = new HookManager(project.rootPath, "session-init")
 
@@ -1100,6 +1094,7 @@ app.on("window-all-closed", async () => {
 //
 // 3. HarnessConfig.mcpManager — MCP server management. Currently managed externally.
 //
-// 4. HarnessConfig.getToolsets — Dynamic toolset injection at stream time
-//    (e.g., Anthropic web search). Currently not wired through harness.
+// 4. HarnessConfig.toolsets — Dynamic toolset injection at stream time
+//    (e.g., Anthropic web search). Worked around by passing provider tools
+//    directly via the tools function.
 // =============================================================================
