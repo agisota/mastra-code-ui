@@ -3,10 +3,12 @@ import type * as pty from "node-pty"
 import type { Harness } from "@mastra/core/harness"
 import type { AuthStorage } from "../../auth/storage.js"
 import type { MCPManager } from "../../mcp/index.js"
+import type { PlaywrightBrowserManager } from "../../browser/playwright-manager.js"
 
 export interface WorktreeSession {
 	harness: Harness<any>
 	mcpManager: MCPManager
+	browserManager: PlaywrightBrowserManager
 	resolveModel: (modelId: string) => any
 	authStorage: AuthStorage
 	projectRoot: string
@@ -37,6 +39,7 @@ export interface HandlerContext {
 	createHarness: (path: string) => Promise<{
 		harness: Harness<any>
 		mcpManager: MCPManager
+		browserManager: PlaywrightBrowserManager
 		resolveModel: (modelId: string) => any
 		authStorage: AuthStorage
 	}>

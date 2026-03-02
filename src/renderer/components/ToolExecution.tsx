@@ -74,6 +74,25 @@ function getDiffCounts(args: unknown): { added: number; removed: number } | null
 	return { added: newLines, removed: oldLines }
 }
 
+/** Check if a tool result contains a base64 image (Computer Use screenshot). */
+function getImageData(result: unknown): string | null {
+	if (!result || typeof result !== "object") return null
+	const r = result as Record<string, unknown>
+	if (r.type === "image" && typeof r.data === "string") return r.data
+	if (Array.isArray(r.content)) {
+		for (const item of r.content) {
+			if (
+				item &&
+				typeof item === "object" &&
+				(item as Record<string, unknown>).type === "image" &&
+				typeof (item as Record<string, unknown>).data === "string"
+			)
+				return (item as Record<string, unknown>).data as string
+		}
+	}
+	return null
+}
+
 type ToolDisplay = {
 	icon: string
 	label: string
@@ -164,6 +183,68 @@ function getToolDisplay(tool: ToolExecutionProps["tool"]): ToolDisplay {
 						? url.slice(0, 57) + "\u2026"
 						: url
 					: null,
+			}
+		}
+		case "computer": {
+			const action = args?.action as string | undefined
+			return {
+				icon: "\u{1F5A5}\uFE0F",
+				label: "Computer Use",
+				pill: action ?? null,
+			}
+		}
+		case "navigate_browser":
+		case "navigate-browser": {
+			const navUrl = args?.url as string | undefined
+			return {
+				icon: "\u{1F310}",
+				label: "Navigate browser",
+				pill: navUrl
+					? navUrl.length > 60
+						? navUrl.slice(0, 57) + "\u2026"
+						: navUrl
+					: null,
+			}
+		}
+		case "bash": {
+			const bashCmd = args?.command as string | undefined
+			return {
+				icon: "\u{1F4BB}",
+				label: "Bash",
+				pill: bashCmd
+					? bashCmd.length > 80
+						? bashCmd.slice(0, 77) + "\u2026"
+						: bashCmd
+					: null,
+			}
+		}
+		case "text_editor": {
+			const editorCmd = args?.command as string | undefined
+			const editorPath = args?.path as string | undefined
+			const editorShortPath = editorPath ? getShortPath(editorPath) : null
+			return {
+				icon: "\u269B\uFE0F",
+				label: editorCmd ? `Editor: ${editorCmd}` : "Text Editor",
+				pill: editorShortPath,
+			}
+		}
+		case "web_fetch": {
+			const fetchUrl = args?.url as string | undefined
+			return {
+				icon: "\u{1F310}",
+				label: "Web fetch",
+				pill: fetchUrl
+					? fetchUrl.length > 60
+						? fetchUrl.slice(0, 57) + "\u2026"
+						: fetchUrl
+					: null,
+			}
+		}
+		case "code_execution": {
+			return {
+				icon: "\u{1F4BB}",
+				label: "Code execution",
+				pill: null,
 			}
 		}
 		case "subagent": {
@@ -272,6 +353,24 @@ export function ToolExecution({ tool }: ToolExecutionProps) {
 					</span>
 				)}
 
+				{/* Screenshot thumbnail for computer tool */}
+				{tool.name === "computer" &&
+					tool.status === "complete" &&
+					getImageData(tool.result) && (
+						<img
+							src={`data:image/jpeg;base64,${getImageData(tool.result)}`}
+							style={{
+								width: 48,
+								height: 30,
+								objectFit: "cover",
+								borderRadius: 3,
+								border: "1px solid var(--border-muted)",
+								flexShrink: 0,
+							}}
+							alt=""
+						/>
+					)}
+
 				{/* Status indicator */}
 				<span style={{ marginLeft: "auto", flexShrink: 0, display: "flex", alignItems: "center" }}>
 					{tool.status === "running" && (
@@ -363,8 +462,34 @@ export function ToolExecution({ tool }: ToolExecutionProps) {
 						</div>
 					)}
 
+					{/* Screenshot image result */}
+					{getImageData(tool.result) && (
+						<div style={{ marginBottom: 6 }}>
+							<div
+								style={{
+									color: "var(--muted)",
+									fontSize: 10,
+									marginBottom: 2,
+									textTransform: "uppercase",
+								}}
+							>
+								Screenshot
+							</div>
+							<img
+								src={`data:image/jpeg;base64,${getImageData(tool.result)}`}
+								style={{
+									maxWidth: "100%",
+									maxHeight: 400,
+									borderRadius: 4,
+									border: "1px solid var(--border-muted)",
+								}}
+								alt="Browser screenshot"
+							/>
+						</div>
+					)}
+
 					{/* Result */}
-					{resultText && (
+					{resultText && !getImageData(tool.result) && (
 						<div>
 							<div
 								style={{

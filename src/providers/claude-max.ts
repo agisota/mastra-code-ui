@@ -165,13 +165,31 @@ export function opencodeClaudeMaxProvider(
 			throw new Error("Not logged in to Anthropic. Run /login first.")
 		}
 
-		// Make request with OAuth headers
+		// Merge incoming headers (e.g. beta flags added by the AI SDK for
+		// provider-defined tools like computer use) with the OAuth headers.
+		const incomingHeaders = new Headers(init?.headers as HeadersInit)
+		const oauthBetas =
+			"oauth-2025-04-20,claude-code-20250219,interleaved-thinking-2025-05-14,fine-grained-tool-streaming-2025-05-14"
+		const sdkBetas = incomingHeaders.get("anthropic-beta")
+		const mergedBetas = sdkBetas
+			? `${oauthBetas},${sdkBetas
+					.split(",")
+					.filter((b) => !oauthBetas.includes(b))
+					.join(",")}`.replace(/,+$/, "")
+			: oauthBetas
+
+		// Drop auth-related headers from the SDK — we handle auth via OAuth.
+		// The SDK sets x-api-key with the dummy "oauth-placeholder" value which
+		// would cause the API to reject the request.
+		incomingHeaders.delete("x-api-key")
+		incomingHeaders.delete("authorization")
+
 		return fetch(url, {
 			...init,
 			headers: {
+				...Object.fromEntries(incomingHeaders.entries()),
 				Authorization: `Bearer ${accessToken}`,
-				"anthropic-beta":
-					"oauth-2025-04-20,claude-code-20250219,interleaved-thinking-2025-05-14,fine-grained-tool-streaming-2025-05-14",
+				"anthropic-beta": mergedBetas,
 				"anthropic-version": "2023-06-01",
 			},
 		})

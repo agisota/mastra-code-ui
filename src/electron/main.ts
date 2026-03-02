@@ -11,6 +11,7 @@ import {
 import * as path from "path"
 import * as os from "os"
 import * as fs from "fs"
+import { exec as execCallback } from "child_process"
 import { fileURLToPath } from "url"
 import * as pty from "node-pty"
 
@@ -70,7 +71,13 @@ import {
 	createWriteFileTool,
 	createSubagentTool,
 	requestSandboxAccessTool,
+	createNavigateBrowserTool,
 } from "../tools/index.js"
+import {
+	PlaywrightBrowserManager,
+	DISPLAY_WIDTH,
+	DISPLAY_HEIGHT,
+} from "../browser/playwright-manager.js"
 import { buildFullPrompt, type PromptContext } from "../prompts/index.js"
 
 // Extracted modules
@@ -400,6 +407,7 @@ async function createHarness(projectPath: string) {
 	})
 
 	const _mcpManager = new MCPManager(project.rootPath)
+	const _browserManager = new PlaywrightBrowserManager()
 
 	const codeAgent = new Agent({
 		id: "code-agent",
@@ -492,6 +500,240 @@ async function createHarness(projectPath: string) {
 				tools.web_search = createGoogle({}).tools.googleSearch()
 			}
 
+			// Computer Use: Anthropic-only, backed by headless Playwright browser
+			if (isAnthropicModel && modeId !== "plan") {
+				tools.navigate_browser = createNavigateBrowserTool(_browserManager)
+
+				const cred = authStorage.get("anthropic")
+				const anthropicProvider = createAnthropic({
+					...(cred?.type === "api_key" ? { apiKey: cred.key } : {}),
+				})
+				tools.computer = anthropicProvider.tools.computer_20251124({
+					displayWidthPx: DISPLAY_WIDTH,
+					displayHeightPx: DISPLAY_HEIGHT,
+					execute: async ({ action, coordinate, text, region }) => {
+						const page = await _browserManager.getPage()
+
+						switch (action) {
+							case "screenshot": {
+								const base64 = await _browserManager.screenshot()
+								return { type: "image" as const, data: base64 }
+							}
+							case "left_click": {
+								if (coordinate)
+									await page.mouse.click(coordinate[0], coordinate[1])
+								return `Clicked at (${coordinate?.[0]}, ${coordinate?.[1]})`
+							}
+							case "right_click": {
+								if (coordinate)
+									await page.mouse.click(coordinate[0], coordinate[1], {
+										button: "right",
+									})
+								return `Right-clicked at (${coordinate?.[0]}, ${coordinate?.[1]})`
+							}
+							case "double_click": {
+								if (coordinate)
+									await page.mouse.dblclick(coordinate[0], coordinate[1])
+								return `Double-clicked at (${coordinate?.[0]}, ${coordinate?.[1]})`
+							}
+							case "middle_click": {
+								if (coordinate)
+									await page.mouse.click(coordinate[0], coordinate[1], {
+										button: "middle",
+									})
+								return `Middle-clicked at (${coordinate?.[0]}, ${coordinate?.[1]})`
+							}
+							case "mouse_move": {
+								if (coordinate)
+									await page.mouse.move(coordinate[0], coordinate[1])
+								return `Moved mouse to (${coordinate?.[0]}, ${coordinate?.[1]})`
+							}
+							case "left_click_drag": {
+								if (coordinate) {
+									await page.mouse.down()
+									await page.mouse.move(coordinate[0], coordinate[1])
+									await page.mouse.up()
+								}
+								return `Dragged to (${coordinate?.[0]}, ${coordinate?.[1]})`
+							}
+							case "type": {
+								if (text) await page.keyboard.type(text)
+								return `Typed "${text}"`
+							}
+							case "key": {
+								if (text) {
+									const keyMap: Record<string, string> = {
+										Return: "Enter",
+										BackSpace: "Backspace",
+										space: " ",
+										Tab: "Tab",
+										Escape: "Escape",
+									}
+									const keys = text
+										.split("+")
+										.map((k) => keyMap[k.trim()] ?? k.trim())
+									if (keys.length === 1) {
+										await page.keyboard.press(keys[0])
+									} else {
+										for (let i = 0; i < keys.length - 1; i++) {
+											await page.keyboard.down(keys[i])
+										}
+										await page.keyboard.press(keys[keys.length - 1])
+										for (let i = keys.length - 2; i >= 0; i--) {
+											await page.keyboard.up(keys[i])
+										}
+									}
+								}
+								return `Pressed key "${text}"`
+							}
+							case "cursor_position": {
+								return "Cursor position not tracked in headless mode"
+							}
+							case "scroll": {
+								if (coordinate) {
+									await page.mouse.move(coordinate[0], coordinate[1])
+								}
+								const scrollAmount = 360
+								const direction =
+									text === "down" || text === "right"
+										? scrollAmount
+										: -scrollAmount
+								if (text === "left" || text === "right") {
+									await page.mouse.wheel(direction, 0)
+								} else {
+									await page.mouse.wheel(0, direction)
+								}
+								return `Scrolled ${text}`
+							}
+							case "zoom": {
+								if (region) {
+									const [x1, y1, x2, y2] = region
+									const clip = {
+										x: x1,
+										y: y1,
+										width: x2 - x1,
+										height: y2 - y1,
+									}
+									const buffer = await page.screenshot({
+										type: "jpeg",
+										quality: 55,
+										clip,
+									})
+									return {
+										type: "image" as const,
+										data: buffer.toString("base64"),
+									}
+								}
+								return {
+									type: "image" as const,
+									data: await _browserManager.screenshot(),
+								}
+							}
+							default:
+								return `Unknown action: ${action}`
+						}
+					},
+				})
+
+				// Bash tool — run shell commands locally via Anthropic's native bash tool
+				tools.bash = anthropicProvider.tools.bash_20250124({
+					execute: async ({ command }) => {
+						return new Promise<string>((resolve) => {
+							execCallback(
+								command,
+								{
+									cwd: project.rootPath,
+									timeout: 120_000,
+									maxBuffer: 10 * 1024 * 1024,
+								},
+								(error, stdout, stderr) => {
+									if (error) {
+										resolve(
+											((stdout ?? "") + "\n" + (stderr ?? "")).trim() ||
+												error.message,
+										)
+									} else {
+										resolve(stderr ? `${stdout}\n${stderr}` : stdout)
+									}
+								},
+							)
+						})
+					},
+				})
+
+				// Text editor tool — view/edit files locally via Anthropic's native text editor tool
+				tools.text_editor = anthropicProvider.tools.textEditor_20250728({
+					execute: async ({
+						command,
+						path: filePath,
+						file_text,
+						old_str,
+						new_str,
+						insert_line,
+						insert_text,
+						view_range,
+					}) => {
+						const fullPath = path.isAbsolute(filePath)
+							? filePath
+							: path.resolve(project.rootPath, filePath)
+
+						switch (command) {
+							case "view": {
+								const content = fs.readFileSync(fullPath, "utf-8")
+								const lines = content.split("\n")
+								if (view_range) {
+									const start = (view_range[0] ?? 1) - 1
+									const end = view_range[1] ?? lines.length
+									return lines
+										.slice(start, end)
+										.map((l, i) => `${start + i + 1}\t${l}`)
+										.join("\n")
+								}
+								return lines.map((l, i) => `${i + 1}\t${l}`).join("\n")
+							}
+							case "create": {
+								fs.mkdirSync(path.dirname(fullPath), {
+									recursive: true,
+								})
+								fs.writeFileSync(fullPath, file_text ?? "")
+								return `File created: ${filePath}`
+							}
+							case "str_replace": {
+								const content = fs.readFileSync(fullPath, "utf-8")
+								if (!old_str || !content.includes(old_str)) {
+									return `Error: old_str not found in ${filePath}`
+								}
+								const count = content.split(old_str).length - 1
+								if (count > 1) {
+									return `Error: old_str appears ${count} times in ${filePath}. It must be unique.`
+								}
+								fs.writeFileSync(
+									fullPath,
+									content.replace(old_str, new_str ?? ""),
+								)
+								return `Replacement applied in ${filePath}`
+							}
+							case "insert": {
+								const content = fs.readFileSync(fullPath, "utf-8")
+								const lines = content.split("\n")
+								const lineNum = insert_line ?? 0
+								lines.splice(lineNum, 0, insert_text ?? "")
+								fs.writeFileSync(fullPath, lines.join("\n"))
+								return `Inserted text at line ${lineNum} in ${filePath}`
+							}
+							default:
+								return `Unknown command: ${command}`
+						}
+					},
+				})
+
+				// Web fetch — server-side URL fetching via Anthropic
+				tools.web_fetch = anthropicProvider.tools.webFetch_20250910()
+
+				// Code execution — server-side sandboxed execution via Anthropic
+				tools.code_execution = anthropicProvider.tools.codeExecution_20250825()
+			}
+
 			const mcpTools = _mcpManager.getTools()
 			Object.assign(tools, mcpTools)
 
@@ -563,6 +805,8 @@ async function createHarness(projectPath: string) {
 			if (event.role === "observer") omState.observerModelId = event.modelId
 			if (event.role === "reflector") omState.reflectorModelId = event.modelId
 		} else if (event.type === "thread_changed") {
+			// Close browser when switching threads — browser state is conversation-specific
+			_browserManager.close().catch(() => {})
 			storage
 				.getThreadById({ threadId: event.threadId })
 				.then((thread) => {
@@ -618,6 +862,7 @@ async function createHarness(projectPath: string) {
 	return {
 		harness: _harness,
 		mcpManager: _mcpManager,
+		browserManager: _browserManager,
 		resolveModel,
 		authStorage,
 	}
@@ -803,6 +1048,7 @@ function cleanupSession(sessionPath: string) {
 	}
 	session.ptySessions.clear()
 	session.mcpManager.disconnect().catch(() => {})
+	session.browserManager.close().catch(() => {})
 	sessions.delete(sessionPath)
 	sessionTimings.delete(sessionPath)
 }
@@ -1018,6 +1264,7 @@ app.whenReady().then(async () => {
 	const initialSession: WorktreeSession = {
 		harness: result.harness,
 		mcpManager: result.mcpManager,
+		browserManager: result.browserManager,
 		resolveModel: result.resolveModel,
 		authStorage: result.authStorage,
 		projectRoot: projectPath,

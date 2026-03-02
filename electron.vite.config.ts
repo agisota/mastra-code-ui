@@ -5,13 +5,15 @@ import { resolve } from "path"
 export default defineConfig({
 	main: {
 		plugins: [
-			externalizeDepsPlugin({ include: ["@ast-grep/napi", "node-pty"] }),
+			externalizeDepsPlugin({
+				include: ["@ast-grep/napi", "node-pty", "playwright-core"],
+			}),
 		],
 		build: {
 			outDir: "dist/main",
 			rollupOptions: {
 				input: "src/electron/main.ts",
-				external: ["@ast-grep/napi", "node-pty"],
+				external: ["@ast-grep/napi", "node-pty", "playwright-core"],
 				output: {
 					format: "cjs",
 				},

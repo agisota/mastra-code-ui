@@ -389,6 +389,7 @@ export function getProjectHandlers(): Record<string, IpcCommandHandler> {
 			const newSession: WorktreeSession = {
 				harness: result.harness,
 				mcpManager: result.mcpManager,
+				browserManager: result.browserManager,
 				resolveModel: result.resolveModel,
 				authStorage: result.authStorage,
 				projectRoot: newPath,
