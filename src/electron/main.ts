@@ -1093,8 +1093,4 @@ app.on("window-all-closed", async () => {
 //    stop, and session events. Currently managed externally.
 //
 // 3. HarnessConfig.mcpManager — MCP server management. Currently managed externally.
-//
-// 4. HarnessConfig.toolsets — Dynamic toolset injection at stream time
-//    (e.g., Anthropic web search). Worked around by passing provider tools
-//    directly via the tools function.
 // =============================================================================
