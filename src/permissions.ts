@@ -56,6 +56,17 @@ const TOOL_CATEGORY_MAP: Record<string, ToolCategory> = {
 	// Execute tools — run arbitrary commands
 	execute_command: "execute",
 
+	// Browser automation tools
+	computer: "execute",
+	navigate_browser: "execute",
+	"navigate-browser": "execute",
+
+	// Anthropic provider-defined tools
+	bash: "execute",
+	text_editor: "edit",
+	web_fetch: "read",
+	code_execution: "execute",
+
 	// Interactive / planning tools — always allowed (no category needed)
 	// ask_user, task_write, task_check, submit_plan, request_sandbox_access
 }
