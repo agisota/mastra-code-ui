@@ -123,23 +123,15 @@ interface HarnessConfig {
 
 ---
 
-## 11. `HarnessConfig.getToolsets` — OPEN
+## ~~11. `HarnessConfig.getToolsets`~~ — RESOLVED (no upstream change needed)
 
 **File:** `src/electron/main.ts`
 
-A function that injects provider-native toolsets (e.g. Anthropic web search) based on the
-current model. It is defined in the app but **never wired** because `HarnessConfig` has
-no `getToolsets` field. Anthropic native web search is silently disabled.
-
-**Workaround:** The function exists but is dead code.
-
-**Ideal API:**
-
-```ts
-interface HarnessConfig {
-	getToolsets?: (modelId: string) => Record<string, ToolSet> | undefined
-}
-```
+Provider-native web search tools (Anthropic `webSearch_20250305()`, OpenAI `webSearch()`,
+Google `googleSearch()`) are now passed directly via the dynamic `tools` function. Mastra's
+`CoreToolBuilder.buildProviderTool()` detects `type: "provider-defined"` and handles them
+correctly. No `getToolsets` config is needed — the `tools` function cascade (~line 481)
+checks for Tavily first, then falls back to the current model's provider-native search.
 
 ---
 
@@ -226,11 +218,11 @@ const totalTokens = usage.totalTokens ?? promptTokens + completionTokens
 
 ## Summary
 
-| Status   | Items                            | Notes                                                       |
-| -------- | -------------------------------- | ----------------------------------------------------------- |
-| RESOLVED | 2, 3, 4, 5, 6, 7, 12, 13, 15, 16 | Fixed by `@mastra/core@1.8.0` typed APIs                    |
-| PARTIAL  | 8                                | Targeted cast replaces `as any`                             |
-| OPEN     | 1                                | `deleteThread` still missing                                |
-| OPEN     | 9, 10, 11                        | Config extensibility (hookManager, mcpManager, getToolsets) |
-| OPEN     | 14                               | Auth integration (intentionally external)                   |
-| FIXED\*  | 17                               | PR merged but not yet released; broken in 1.8.0             |
+| Status   | Items                                | Notes                                                                      |
+| -------- | ------------------------------------ | -------------------------------------------------------------------------- |
+| RESOLVED | 2, 3, 4, 5, 6, 7, 11, 12, 13, 15, 16 | Fixed by `@mastra/core@1.8.0` typed APIs; 11 resolved via `tools` function |
+| PARTIAL  | 8                                    | Targeted cast replaces `as any`                                            |
+| OPEN     | 1                                    | `deleteThread` still missing                                               |
+| OPEN     | 9, 10                                | Config extensibility (hookManager, mcpManager)                             |
+| OPEN     | 14                                   | Auth integration (intentionally external)                                  |
+| FIXED\*  | 17                                   | PR merged but not yet released; broken in 1.8.0                            |

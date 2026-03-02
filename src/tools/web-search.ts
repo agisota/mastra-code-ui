@@ -20,11 +20,12 @@ function getTavilyClient() {
  * Used by main.ts to decide whether to include Tavily tools or fall back
  * to Anthropic's native web search.
  */
-function hasTavilyKey(): boolean {
+export function hasTavilyKey(): boolean {
 	return !!process.env.TAVILY_API_KEY
 }
 
 export function createWebSearchTool() {
+	if (!hasTavilyKey()) return null
 	return createTool({
 		id: "web-search",
 		description:
@@ -102,6 +103,7 @@ export function createWebSearchTool() {
 }
 
 export function createWebExtractTool() {
+	if (!hasTavilyKey()) return null
 	return createTool({
 		id: "web-extract",
 		description:

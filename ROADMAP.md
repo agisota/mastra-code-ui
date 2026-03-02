@@ -50,7 +50,7 @@ Tracked in [UPSTREAM_HARNESS_GAPS.md](./UPSTREAM_HARNESS_GAPS.md). Key items:
 - [x] `HarnessRequestContext.registerQuestion` / `registerPlanApproval` in published types _(resolved in @mastra/core@1.8.0)_
 - [ ] `HarnessConfig.hookManager` — Pass hook manager through config instead of external wiring
 - [ ] `HarnessConfig.mcpManager` — Pass MCP manager through config instead of ad-hoc tool injection
-- [ ] `HarnessConfig.getToolsets` — Dynamic toolset injection (e.g. Anthropic web search) at stream time
+- [x] ~~`HarnessConfig.getToolsets`~~ — Provider-native web search now passed directly via `tools` function (Anthropic, OpenAI, Google fallback cascade); no `getToolsets` config needed
 - [-] `getTokenUsage()` returns zeros — AI SDK v6 field name mismatch; PR merged upstream but not yet released
 
 ## Task & Context Management
@@ -74,7 +74,7 @@ Structured task tracking and context sharing across agents.
 
 - [x] **MCP server management UI** — Configure, toggle, and monitor MCP servers from the app (user, project, and local scopes) _(MCP tab in Settings shows server statuses with connection indicator, tool count, and tool names; add/remove servers with project or global scope; reload all servers)_
 - [ ] **Wire MCP through Harness** — Pass `mcpManager` through `HarnessConfig` instead of external management
-- [ ] **Native toolsets** — Wire `getToolsets` through Harness to enable Anthropic native web search and other provider-specific tools
+- [x] **Native web search** — Provider-native web search (Anthropic, OpenAI, Google) passed directly via `tools` function with Tavily fallback _(provider-defined tools handled by `CoreToolBuilder.buildProviderTool()`; cascade in `main.ts` ~line 481)_
 - [x] **Tool confirmation with `always_allow_category`** — Surface the harness's category-level auto-approve in the UI (not just per-call approve/decline) _(ToolApprovalDialog now includes "Always allow [category]" button that grants session-wide auto-approve for the category)_
 
 ## Multi-Provider Auth
