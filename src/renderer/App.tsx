@@ -252,7 +252,7 @@ export function App() {
 	})
 
 	// Chat handlers
-	const handleSend = useCallback(async (content: string) => {
+	const handleSend = useCallback(async (content: string, files?: Array<{ type: "image" | "file"; name: string; mimeType: string; data: string; preview: string }>) => {
 		ensureAudioContext()
 		let finalContent = content
 		if (content.startsWith("/")) {
@@ -269,16 +269,45 @@ export function App() {
 				// Command not found — send as-is
 			}
 		}
+
+		// Separate images from non-image files
+		const imageFiles = files?.filter((f) => f.type === "image")
+		const textFiles = files?.filter((f) => f.type === "file")
+
+		// Inline non-image file contents into the message text
+		if (textFiles && textFiles.length > 0) {
+			const fileBlocks = textFiles
+				.map((f) => `<file name="${f.name}">\n${f.data}\n</file>`)
+				.join("\n\n")
+			finalContent = finalContent
+				? `${finalContent}\n\n${fileBlocks}`
+				: fileBlocks
+		}
+
+		const messageContent: Message["content"] = []
+		if (finalContent) {
+			messageContent.push({ type: "text", text: finalContent })
+		}
+		if (imageFiles) {
+			for (const img of imageFiles) {
+				messageContent.push({ type: "image", mimeType: img.mimeType, data: img.data })
+			}
+		}
 		dispatch({
 			type: "MESSAGE_START",
 			message: {
 				id: `user-${Date.now()}`,
 				role: "user",
-				content: [{ type: "text", text: finalContent }],
+				content: messageContent,
 				createdAt: new Date().toISOString(),
 			},
 		})
-		await window.api.invoke({ type: "sendMessage", content: finalContent })
+		const ipcImages = imageFiles?.map(({ mimeType, data }) => ({ mimeType, data }))
+		await window.api.invoke({
+			type: "sendMessage",
+			content: finalContent,
+			...(ipcImages && ipcImages.length > 0 ? { images: ipcImages } : {}),
+		})
 	}, [])
 
 	const handleAbort = useCallback(async () => {
