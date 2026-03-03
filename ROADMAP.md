@@ -52,6 +52,8 @@ Tracked in [UPSTREAM_HARNESS_GAPS.md](./UPSTREAM_HARNESS_GAPS.md). Key items:
 - [ ] `HarnessConfig.mcpManager` — Pass MCP manager through config instead of ad-hoc tool injection
 - [x] ~~`HarnessConfig.getToolsets`~~ — Provider-native web search now passed directly via `tools` function (Anthropic, OpenAI, Google fallback cascade); no `getToolsets` config needed
 - [-] `getTokenUsage()` returns zeros — AI SDK v6 field name mismatch; PR merged upstream but not yet released
+- [-] `createMastraCode` does not export `resolveModel` — breaks thread title generation when using Claude Max / Codex auth; PR merged upstream but not yet released
+- [-] `createMastraCode` does not wire `extraTools` at runtime — custom tools passed via config are silently ignored; PR merged upstream but not yet released
 
 ## Task & Context Management
 

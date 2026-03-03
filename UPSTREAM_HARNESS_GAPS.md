@@ -216,6 +216,65 @@ const totalTokens = usage.totalTokens ?? promptTokens + completionTokens
 
 ---
 
+## 18. `createMastraCode` Does Not Export `resolveModel` — FIXED (unreleased)
+
+**Files:** `src/electron/main.ts`, `src/electron/helpers.ts`
+
+`createMastraCode()` internalizes its `resolveModel` function (which handles Claude Max auth
+via `opencodeClaudeMaxProvider`, Codex auth via `openaiCodexProvider`, Moonshot, and generic
+routing) but does not include it in the return value. The Electron app needs `resolveModel`
+for `generateThreadTitle` — a lightweight `generateText()` call to produce thread titles.
+
+The local workaround creates bare AI SDK instances (`createAnthropic({})`, `createOpenAI({})`)
+without auth credentials, so the `generateText()` call fails silently and threads stay
+titled "New Thread".
+
+**Status:** A PR has been merged upstream to export `resolveModel` from `createMastraCode`,
+but the fix has not been included in a published release yet. Still broken in `mastracode@0.4.0`.
+
+**Workaround:** Local `resolveModel` in `main.ts` (lines 78–85) that creates unauthenticated
+SDK instances. Title generation fails when using Claude Max or Codex auth flows.
+
+**Ideal fix:**
+
+```ts
+// createMastraCode return value should include resolveModel:
+return {
+	harness,
+	mcpManager,
+	hookManager,
+	authStorage,
+	resolveModel,
+	storageWarning,
+}
+```
+
+Once released, the local `resolveModel` copy and its imports (`createAnthropic`, `createOpenAI`,
+`ModelRouterLanguageModel`) can be removed from `main.ts`.
+
+---
+
+## 19. `createMastraCode` Does Not Support `extraTools` at Runtime — FIXED (unreleased)
+
+**Files:** `src/electron/main.ts`
+
+`MastraCodeConfig` declares an `extraTools` field for injecting additional tools (e.g.
+browser tools, custom Electron tools) into the agent's tool set. The config type accepts it,
+but the internal wiring does not merge `extraTools` into the dynamic tool function at runtime.
+Custom tools passed via `extraTools` are silently ignored.
+
+**Status:** A PR has been merged upstream to wire `extraTools` through the tool resolution
+pipeline, but the fix has not been included in a published release yet. Still broken in
+`mastracode@0.4.0`.
+
+**Workaround:** Tools are injected by patching the harness's tool set after creation, or by
+using `HarnessConfig.tools` directly when not using `createMastraCode`.
+
+**Ideal fix:** `extraTools` from config should be merged into the dynamic tool function
+alongside built-in and MCP tools.
+
+---
+
 ## Summary
 
 | Status   | Items                                | Notes                                                                      |
@@ -225,4 +284,6 @@ const totalTokens = usage.totalTokens ?? promptTokens + completionTokens
 | OPEN     | 1                                    | `deleteThread` still missing                                               |
 | OPEN     | 9, 10                                | Config extensibility (hookManager, mcpManager)                             |
 | OPEN     | 14                                   | Auth integration (intentionally external)                                  |
-| FIXED\*  | 17                                   | PR merged but not yet released; broken in 1.8.0                            |
+| FIXED\*  | 17                                   | Token usage field mismatch; PR merged, not released                        |
+| FIXED\*  | 18                                   | `resolveModel` not exported; PR merged, not released                       |
+| FIXED\*  | 19                                   | `extraTools` not wired; PR merged, not released                            |
