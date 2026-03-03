@@ -4,7 +4,7 @@ import type { IpcCommandHandler } from "./types.js"
 export function getIntegrationHandlers(): Record<string, IpcCommandHandler> {
 	return {
 		linearConnect: async (command, ctx) => {
-			const h = ctx.getActiveSession().harness
+			const session = ctx.getActiveSession()
 			const clientId = process.env.LINEAR_CLIENT_ID
 			const clientSecret = process.env.LINEAR_CLIENT_SECRET
 			const hasOAuth = !!(clientId && clientSecret)
@@ -87,7 +87,7 @@ export function getIntegrationHandlers(): Record<string, IpcCommandHandler> {
 								throw new Error("No access token in response")
 							}
 
-							await h.setState({
+							session.electronState.setState({
 								linearApiKey: tokenData.access_token,
 							})
 							authWindow.close()
@@ -177,7 +177,7 @@ export function getIntegrationHandlers(): Record<string, IpcCommandHandler> {
 			return await response.json()
 		},
 		linkLinearIssue: async (command, ctx) => {
-			const h = ctx.getActiveSession().harness
+			const session = ctx.getActiveSession()
 			const issueId = command.issueId as string
 			const issueIdentifier = command.issueIdentifier as string
 			const doneStateId = command.doneStateId as string
@@ -185,7 +185,7 @@ export function getIntegrationHandlers(): Record<string, IpcCommandHandler> {
 			const parentLinearApiKey = command.linearApiKey as string
 			const parentLinearTeamId = command.linearTeamId as string
 
-			await h.setState({
+			session.electronState.setState({
 				linkedLinearIssueId: issueId,
 				linkedLinearIssueIdentifier: issueIdentifier,
 				linkedLinearDoneStateId: doneStateId,
@@ -228,25 +228,21 @@ export function getIntegrationHandlers(): Record<string, IpcCommandHandler> {
 			> = {}
 			for (const [wtPath, session] of ctx.sessions.entries()) {
 				try {
-					const wtState = session.harness.getState?.() as
-						| Record<string, unknown>
-						| undefined
-					const wtIssueId = (wtState?.linkedLinearIssueId as string) ?? ""
-					const wtIssueIdentifier =
-						(wtState?.linkedLinearIssueIdentifier as string) ?? ""
-					if (wtIssueId && wtIssueIdentifier) {
+					const eState = session.electronState.getState()
+					if (
+						eState.linkedLinearIssueId &&
+						eState.linkedLinearIssueIdentifier
+					) {
 						linked[wtPath] = {
-							issueId: wtIssueId,
-							issueIdentifier: wtIssueIdentifier,
+							issueId: eState.linkedLinearIssueId,
+							issueIdentifier: eState.linkedLinearIssueIdentifier,
 							provider: "linear",
 						}
 					}
-					const wtGithubIssue =
-						(wtState?.linkedGithubIssueNumber as number) ?? 0
-					if (wtGithubIssue > 0 && !linked[wtPath]) {
+					if (eState.linkedGithubIssueNumber > 0 && !linked[wtPath]) {
 						linked[wtPath] = {
-							issueId: `gh-${wtGithubIssue}`,
-							issueIdentifier: `#${wtGithubIssue}`,
+							issueId: `gh-${eState.linkedGithubIssueNumber}`,
+							issueIdentifier: `#${eState.linkedGithubIssueNumber}`,
 							provider: "github",
 						}
 					}
@@ -259,8 +255,8 @@ export function getIntegrationHandlers(): Record<string, IpcCommandHandler> {
 		githubConnect: async (command, ctx) => {
 			const { execSync } =
 				require("child_process") as typeof import("child_process")
-			const h = ctx.getActiveSession().harness
-			const projectRoot = ctx.getActiveSession().projectRoot
+			const session = ctx.getActiveSession()
+			const projectRoot = session.projectRoot
 			let ghToken = (command.token as string) || ""
 
 			if (!ghToken) {
@@ -306,7 +302,7 @@ export function getIntegrationHandlers(): Record<string, IpcCommandHandler> {
 					// Not a git repo or no remote
 				}
 
-				await h.setState({
+				session.electronState.setState({
 					githubToken: ghToken,
 					githubOwner: ghOwner,
 					githubRepo: ghRepo,
@@ -327,7 +323,7 @@ export function getIntegrationHandlers(): Record<string, IpcCommandHandler> {
 			}
 		},
 		githubDisconnect: async (_command, ctx) => {
-			await ctx.getActiveSession().harness.setState({
+			ctx.getActiveSession().electronState.setState({
 				githubToken: "",
 				githubOwner: "",
 				githubRepo: "",
@@ -359,8 +355,7 @@ export function getIntegrationHandlers(): Record<string, IpcCommandHandler> {
 			return await ghResponse.json()
 		},
 		linkGithubIssue: async (command, ctx) => {
-			const h = ctx.getActiveSession().harness
-			await h.setState({
+			ctx.getActiveSession().electronState.setState({
 				linkedGithubIssueNumber: command.issueNumber as number,
 				linkedGithubIssueTitle: command.issueTitle as string,
 				githubToken: command.githubToken as string,

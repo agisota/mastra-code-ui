@@ -11,11 +11,14 @@ A desktop coding agent built with [Mastra](https://mastra.ai) and Electron.
 - **MCP support** - Connect external tool servers via Model Context Protocol with per-project or global config
 - **Permission system** - Granular allow/ask/deny policies per tool category (read, edit, execute, MCP) with YOLO mode
 - **Linear integration** - Kanban board with issue tracking, status updates, and worktree linking
+- **GitHub integration** - Issue linking, PR generation, and API access
 - **Git worktree management** - Isolated sessions per worktree with automatic project detection
 - **Observational memory** - Observer/reflector models extract and synthesize context from conversations
 - **Subagent execution** - Spawn nested agents for parallel task execution
-- **Token tracking** - Persistent token counts per thread
-- **Multi-panel IDE** - Chat, file explorer, git panel, embedded terminal, and multi-thread tabs
+- **Token tracking** - Persistent token counts and cost estimates per thread
+- **Multi-panel IDE** - Chat, file explorer, git panel, embedded terminal, diff viewer, and multi-thread tabs
+- **Slash commands** - Custom commands loaded from project and global config directories
+- **Desktop notifications** - Native alerts for agent completion, tool approval, and errors
 
 ## Installation
 
@@ -97,44 +100,121 @@ Accessible from the app UI:
 
 ```
 ┌──────────────────────────────────────────────────────────────┐
-│                   Electron Desktop App                       │
-│               (React + IPC + node-pty)                       │
-├──────────────────────────────────────────────────────────────┤
-│                    Permission System                         │
-│  - Per-category policies (read, edit, execute, mcp)          │
-│  - Session grants and YOLO mode                              │
+│                       React Renderer                         │
+│   Chat, FileEditor, DiffEditor, Terminal, TaskBoard, etc.    │
+│                   (src/renderer/)                             │
+└──────────────────────────┬───────────────────────────────────┘
+                           │ IPC (window.api)
+                           ▼
+┌──────────────────────────────────────────────────────────────┐
+│                  Electron Main Process                        │
+│                    (src/electron/)                            │
+│                                                              │
+│  ┌────────────────────┐  ┌───────────────────────────────┐   │
+│  │   IPC Dispatcher   │  │    ElectronStateManager       │   │
+│  │  14 handler files  │  │  Linear/GitHub integration    │   │
+│  │  (src/electron/    │  │  state per session            │   │
+│  │   ipc/)            │  │  (src/electron/               │   │
+│  │                    │  │   electron-state.ts)           │   │
+│  └────────────────────┘  └───────────────────────────────┘   │
+│                                                              │
+│  Window management · PTY terminals · Desktop notifications   │
+│  Permission UI · Event bridging · Session lifecycle          │
 └──────────────────────────┬───────────────────────────────────┘
                            │
                            ▼
 ┌──────────────────────────────────────────────────────────────┐
-│                        Harness                               │
-│  (@mastra/core/harness)                                      │
+│                   createMastraCode()                          │
+│                    (mastracode pkg)                           │
+│                                                              │
+│  Returns: { harness, mcpManager, hookManager, authStorage }  │
+│                                                              │
+│  Handles internally:                                         │
+│  - Agent creation with dynamic model/tools/memory/workspace  │
+│  - Auth storage + OAuth provider wiring                      │
+│  - LibSQL storage for threads/messages/tokens                │
+│  - Tool registration (file, grep, glob, shell, web, etc.)    │
+│  - MCP server lifecycle and tool namespacing                 │
+│  - Hook manager for pre/post tool execution                  │
 │  - Mode management (plan, build, fast)                       │
-│  - Thread/message persistence                                │
-│  - Event system for UI updates                               │
-│  - State management with Zod schemas                         │
 │  - Observational memory (observer + reflector)               │
-└──────────┬───────────────────────────────┬───────────────────┘
-           │                               │
-           ▼                               ▼
-┌────────────────────────┐   ┌─────────────────────────────────┐
-│      Mastra Agent      │   │          MCP Manager             │
-│  - Dynamic model       │   │  - Server lifecycle              │
-│  - Tool execution      │   │  - Tool namespacing              │
-│  - Subagent spawning   │   │  - Per-project/global config     │
-│  - Memory integration  │   │                                  │
-└──────────┬─────────────┘   └─────────────────────────────────┘
-           │
-           ▼
-┌──────────────────────────────────────────────────────────────┐
-│                      LibSQL Storage                          │
-│  - Thread persistence                                        │
-│  - Message history                                           │
-│  - Token usage tracking                                      │
-└──────────────────────────────────────────────────────────────┘
+│  - LSP workspace integration                                 │
+│  - Subagent spawning                                         │
+└──────────────────────────┬───────────────────────────────────┘
+                           │
+              ┌────────────┴────────────┐
+              ▼                         ▼
+┌──────────────────────┐  ┌─────────────────────────────────┐
+│     Harness           │  │          MCP Manager             │
+│  (@mastra/core)       │  │  - Server lifecycle              │
+│  - Thread persistence │  │  - Tool namespacing              │
+│  - Event system       │  │  - Per-project/global config     │
+│  - State management   │  │                                  │
+│  - Mode switching     │  │                                  │
+└───────────────────────┘  └─────────────────────────────────┘
 ```
 
-The Electron main process instantiates the Harness and communicates with the React renderer over IPC. Each worktree gets an isolated session with its own state, MCP connections, and permission grants.
+The Electron main process calls `createMastraCode()` from the `mastracode` package, which returns a fully configured Harness with agent, tools, storage, MCP, and auth already wired up. The Electron layer is a thin shell that adds window management, IPC routing, PTY terminals, desktop notifications, and integration state (Linear/GitHub) on top.
+
+Each worktree gets an isolated session with its own Harness instance, MCP connections, ElectronState, and permission grants.
+
+### Source layout
+
+```
+src/
+├── electron/              Main process
+│   ├── main.ts            App lifecycle, createHarness via createMastraCode
+│   ├── electron-state.ts  Per-session state for Linear/GitHub integrations
+│   ├── helpers.ts         Auth, thread title generation, thread deletion
+│   ├── notifications.ts   Native desktop notifications
+│   └── ipc/               IPC command handlers (14 files)
+│       ├── harness-handlers.ts      Messages, threads, modes, models, state
+│       ├── project-handlers.ts      Project switching, worktree management
+│       ├── integration-handlers.ts  Linear/GitHub connect, link, query
+│       ├── dashboard-handlers.ts    Agent dashboard data aggregation
+│       ├── settings-handlers.ts     Thinking level, notifications, smart editing
+│       ├── permission-handlers.ts   Tool approval, YOLO mode
+│       ├── auth-handlers.ts         OAuth login flows
+│       ├── git-handlers.ts          Git status, diff, branches
+│       ├── file-handlers.ts         File reading for editor panels
+│       ├── context-handlers.ts      Context/file attachment
+│       ├── mcp-handlers.ts          MCP server management
+│       ├── pty-handlers.ts          Terminal sessions via node-pty
+│       ├── slash-command-handlers.ts Custom command loading
+│       └── types.ts                 Shared types
+│
+├── renderer/              React UI (Vite + React 19)
+│   ├── App.tsx            Root layout, state, keyboard shortcuts
+│   ├── main.tsx           Entry point
+│   ├── components/        37 components + subdirectories
+│   │   ├── ChatView.tsx           Streaming chat with tool executions
+│   │   ├── FileEditor.tsx         Syntax-highlighted file viewer
+│   │   ├── DiffEditor.tsx         Side-by-side diff viewer
+│   │   ├── TerminalPanel.tsx      xterm.js terminal
+│   │   ├── FileTree.tsx           Project file explorer
+│   │   ├── GitPanel.tsx           Git status and changes
+│   │   ├── TaskBoard.tsx          Linear/GitHub issue kanban
+│   │   ├── AgentDashboard.tsx     Multi-agent monitoring
+│   │   ├── Settings.tsx           App settings panel
+│   │   ├── ModelSelector.tsx      Model picker with auth status
+│   │   ├── CommandPalette.tsx     Cmd+K command palette
+│   │   └── ...
+│   ├── hooks/             Custom React hooks
+│   │   ├── useChatReducer.ts      Chat state machine
+│   │   ├── useHarnessEvents.ts    IPC event subscription
+│   │   ├── useLinearApi.ts        Linear API client
+│   │   ├── useGithubApi.ts        GitHub API client
+│   │   └── ...
+│   ├── types/             TypeScript type definitions
+│   └── styles/            CSS
+│
+├── permissions.ts         Tool permission system (categories, policies, YOLO)
+└── utils/                 Shared utilities
+    ├── project.ts         Git detection, app data paths
+    ├── cost.ts            Token cost estimation
+    ├── recent-projects.ts Recent project tracking
+    └── ...
+```
 
 ## Development
 
@@ -146,6 +226,17 @@ pnpm typecheck    # type check
 pnpm test         # run tests (vitest)
 pnpm format       # format with prettier
 ```
+
+### Keyboard shortcuts
+
+| Shortcut      | Action          |
+| ------------- | --------------- |
+| `Cmd+N`       | New thread      |
+| `Cmd+O`       | Open project    |
+| `Cmd+B`       | Toggle sidebar  |
+| `` Cmd+` ``   | Toggle terminal |
+| `Cmd+Shift+E` | Toggle explorer |
+| `Cmd+Shift+G` | Git changes     |
 
 ## Credits
 

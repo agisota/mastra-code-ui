@@ -15,72 +15,25 @@ import * as fs from "fs"
 import { fileURLToPath } from "url"
 import * as pty from "node-pty"
 
-import { Agent } from "@mastra/core/agent"
-import { noopLogger } from "@mastra/core/logger"
-import type { RequestContext } from "@mastra/core/request-context"
-import { ModelRouterLanguageModel } from "@mastra/core/llm"
-import type { LanguageModel as MastraLanguageModel } from "@mastra/core/llm"
-import {
-	Workspace,
-	LocalFilesystem,
-	LocalSandbox,
-} from "@mastra/core/workspace"
-import { LibSQLStore } from "@mastra/libsql"
-import { Memory } from "@mastra/memory"
-import { z } from "zod"
 import { createAnthropic } from "@ai-sdk/anthropic"
-import { createGoogle } from "@ai-sdk/google"
 import { createOpenAI } from "@ai-sdk/openai"
+import { ModelRouterLanguageModel } from "@mastra/core/llm"
 
-import { Harness } from "@mastra/core/harness"
-import type { HarnessRequestContext } from "@mastra/core/harness"
-import { Mastra } from "@mastra/core/mastra"
-import {
-	opencodeClaudeMaxProvider,
-	setAuthStorage,
-} from "../providers/claude-max.js"
-import {
-	openaiCodexProvider,
-	setAuthStorage as setOpenAIAuthStorage,
-} from "../providers/openai-codex.js"
-import { AuthStorage } from "../auth/storage.js"
-import { HookManager } from "../hooks/index.js"
-import { MCPManager } from "../mcp/index.js"
-import {
-	detectProject,
-	getDatabasePath,
-	getAppDataDir,
-} from "../utils/project.js"
+import { createMastraCode } from "mastracode"
+
+import { getAppDataDir } from "../utils/project.js"
 import {
 	getToolCategory,
 	TOOL_CATEGORIES,
 	YOLO_POLICIES,
 } from "../permissions.js"
 import type { ToolCategory } from "../permissions.js"
-import { startGatewaySync } from "../utils/gateway-sync.js"
-import {
-	createViewTool,
-	createExecuteCommandTool,
-	stringReplaceLspTool,
-	astSmartEditTool,
-	createWebSearchTool,
-	createWebExtractTool,
-	hasTavilyKey,
-	createGrepTool,
-	createGlobTool,
-	createWriteFileTool,
-	createSubagentTool,
-	requestSandboxAccessTool,
-	createNavigateBrowserTool,
-} from "../tools/index.js"
-import {
-	PlaywrightBrowserManager,
-	DISPLAY_WIDTH,
-	DISPLAY_HEIGHT,
-} from "../browser/playwright-manager.js"
-import { buildFullPrompt, type PromptContext } from "../prompts/index.js"
+
+import { AuthStorage } from "../auth/storage.js"
+import { PlaywrightBrowserManager } from "../browser/playwright-manager.js"
 
 // Extracted modules
+import { ElectronStateManager } from "./electron-state.js"
 import type { WorktreeSession, AgentTiming } from "./ipc/types.js"
 import { getAllHandlers } from "./ipc/index.js"
 import { saveRecentProject } from "../utils/recent-projects.js"
@@ -114,665 +67,73 @@ function getActiveSession(): WorktreeSession {
 const sessionTimings = new Map<string, AgentTiming>()
 
 // =============================================================================
-// Gateway Sync
-// =============================================================================
-startGatewaySync(5 * 60 * 1000)
-
-// =============================================================================
 // Helpers
 // =============================================================================
-function findCommonAncestor(paths: string[]): string {
-	if (paths.length === 0) return "/"
-	if (paths.length === 1) return paths[0]
-	const split = paths.map((p) => path.resolve(p).split(path.sep))
-	const minLen = Math.min(...split.map((s) => s.length))
-	const common: string[] = []
-	for (let i = 0; i < minLen; i++) {
-		const seg = split[0][i]
-		if (split.every((s) => s[i] === seg)) {
-			common.push(seg)
-		} else {
-			break
-		}
-	}
-	return common.length <= 1 ? path.sep : common.join(path.sep)
-}
 
-function collectSkillPaths(skillsDirs: string[]): string[] {
-	const paths: string[] = []
-	const seen = new Set<string>()
-	for (const skillsDir of skillsDirs) {
-		if (!fs.existsSync(skillsDir)) continue
-		const resolved = fs.realpathSync(skillsDir)
-		if (!seen.has(resolved)) {
-			seen.add(resolved)
-			paths.push(skillsDir)
-		}
-		try {
-			const entries = fs.readdirSync(skillsDir, { withFileTypes: true })
-			for (const entry of entries) {
-				if (entry.isSymbolicLink()) {
-					const linkPath = path.join(skillsDir, entry.name)
-					const realPath = fs.realpathSync(linkPath)
-					const stat = fs.statSync(realPath)
-					if (stat.isDirectory()) {
-						const realParent = path.dirname(realPath)
-						if (!seen.has(realParent)) {
-							seen.add(realParent)
-							paths.push(realParent)
-						}
-					}
-				}
-			}
-		} catch {
-			// Ignore
-		}
+// =============================================================================
+// Lightweight resolveModel — needed for generateThreadTitle.
+// createMastraCode handles the full model resolution internally but doesn't
+// expose it, so we keep a minimal version for the one call site that needs it.
+// =============================================================================
+function resolveModel(modelId: string) {
+	if (modelId.startsWith("anthropic/")) {
+		return createAnthropic({})(modelId.substring("anthropic/".length))
+	} else if (modelId.startsWith("openai/")) {
+		return createOpenAI({})(modelId.substring("openai/".length))
 	}
-	return paths
+	return new ModelRouterLanguageModel(modelId)
 }
 
 // =============================================================================
-// Create Harness (same logic as src/main.ts)
+// Create Harness via createMastraCode
 // =============================================================================
 async function createHarness(projectPath: string) {
+	const { harness, mcpManager, hookManager, storageWarning } =
+		await createMastraCode({ cwd: projectPath })
+
+	if (storageWarning) {
+		console.warn("[storage]", storageWarning)
+	}
+
+	// Use our local AuthStorage which has getDefaultModelForProvider, model
+	// tracking, and other methods the mastracode package's version lacks.
+	// Both read/write the same auth.json file so credentials stay in sync.
 	const authStorage = new AuthStorage()
-	setAuthStorage(authStorage)
-	setOpenAIAuthStorage(authStorage)
+	const electronState = new ElectronStateManager()
 
-	const project = detectProject(projectPath)
+	const browserManager = new PlaywrightBrowserManager()
 
-	const DEFAULT_OM_MODEL_ID = "google/gemini-2.5-flash"
-	const stateSchema = z.object({
-		projectPath: z.string().optional(),
-		projectName: z.string().optional(),
-		gitBranch: z.string().optional(),
-		lastCommand: z.string().optional(),
-		currentModelId: z.string().default(""),
-		subagentModelId: z.string().optional(),
-		observerModelId: z.string().default(DEFAULT_OM_MODEL_ID),
-		reflectorModelId: z.string().default(DEFAULT_OM_MODEL_ID),
-		observationThreshold: z.number().default(30_000),
-		reflectionThreshold: z.number().default(40_000),
-		thinkingLevel: z.string().default("off"),
-		yolo: z.boolean().default(false),
-		smartEditing: z.boolean().default(true),
-		notifications: z.enum(["bell", "system", "both", "off"]).default("both"),
-		tasks: z
-			.array(
-				z.object({
-					content: z.string(),
-					status: z.enum(["pending", "in_progress", "completed"]),
-					activeForm: z.string(),
-				}),
-			)
-			.default([]),
-		linearApiKey: z.string().default(""),
-		linearTeamId: z.string().default(""),
-		linkedLinearIssueId: z.string().default(""),
-		linkedLinearIssueIdentifier: z.string().default(""),
-		linkedLinearDoneStateId: z.string().default(""),
-		// GitHub Issues integration
-		githubToken: z.string().default(""),
-		githubOwner: z.string().default(""),
-		githubRepo: z.string().default(""),
-		githubUsername: z.string().default(""),
-		linkedGithubIssueNumber: z.number().default(0),
-		linkedGithubIssueTitle: z.string().default(""),
-		prInstructions: z.string().default(""),
-		sandboxAllowedPaths: z.array(z.string()).default([]),
-		defaultClonePath: z
-			.string()
-			.default(path.join(os.homedir(), "mastra-code", "workspaces")),
-		activePlan: z
-			.object({
-				title: z.string(),
-				plan: z.string(),
-				approvedAt: z.string(),
-			})
-			.nullable()
-			.default(null),
-	})
-
-	const storage = new LibSQLStore({
-		id: "mastra-code-storage",
-		url: `file:${getDatabasePath()}`,
-	})
-
-	const DEFAULT_OBS_THRESHOLD = 40_000
-	const DEFAULT_REF_THRESHOLD = 50_000
-
-	const omState = {
-		observerModelId: DEFAULT_OM_MODEL_ID,
-		reflectorModelId: DEFAULT_OM_MODEL_ID,
-		obsThreshold: DEFAULT_OBS_THRESHOLD,
-		refThreshold: DEFAULT_REF_THRESHOLD,
-	}
-
-	function getObserverModel() {
-		return resolveModel(omState.observerModelId)
-	}
-
-	function getReflectorModel() {
-		return resolveModel(omState.reflectorModelId)
-	}
-
-	let cachedMemory: Memory | null = null
-	let cachedMemoryKey: string | null = null
-
-	function getDynamicMemory({
-		requestContext,
-	}: {
-		requestContext: RequestContext
-	}) {
-		const ctx = requestContext.get("harness") as
-			| HarnessRequestContext<typeof stateSchema>
-			| undefined
-		const state = ctx?.getState?.()
-		const obsThreshold = state?.observationThreshold ?? omState.obsThreshold
-		const refThreshold = state?.reflectionThreshold ?? omState.refThreshold
-		const cacheKey = `${obsThreshold}:${refThreshold}`
-		if (cachedMemory && cachedMemoryKey === cacheKey) return cachedMemory
-		cachedMemory = new Memory({
-			storage,
-			options: {
-				generateTitle: false,
-				observationalMemory: {
-					enabled: true,
-					scope: "thread",
-					observation: {
-						bufferTokens: 1 / 5,
-						bufferActivation: 3 / 4,
-						model: getObserverModel,
-						messageTokens: obsThreshold,
-						blockAfter: 1.25,
-						modelSettings: { maxOutputTokens: 60000 },
-					},
-					reflection: {
-						bufferActivation: 1 / 3,
-						blockAfter: 1,
-						model: getReflectorModel,
-						observationTokens: refThreshold,
-						modelSettings: { maxOutputTokens: 60000 },
-					},
-				},
-			},
-		})
-		cachedMemoryKey = cacheKey
-		return cachedMemory
-	}
-
-	function resolveModel(modelId: string) {
-		const isAnthropicModel = modelId.startsWith("anthropic/")
-		const isOpenAIModel = modelId.startsWith("openai/")
-		const isMoonshotModel = modelId.startsWith("moonshotai/")
-		if (isMoonshotModel) {
-			if (!process.env.MOONSHOT_AI_API_KEY) {
-				throw new Error(`Need MOONSHOT_AI_API_KEY`)
-			}
-			return createAnthropic({
-				apiKey: process.env.MOONSHOT_AI_API_KEY!,
-				baseURL: "https://api.moonshot.ai/anthropic/v1",
-				name: "moonshotai.anthropicv1",
-			})(modelId.substring("moonshotai/".length))
-		} else if (isAnthropicModel) {
-			const cred = authStorage.get("anthropic")
-			if (cred?.type === "api_key") {
-				return createAnthropic({ apiKey: cred.key })(
-					modelId.substring("anthropic/".length),
-				)
-			}
-			return opencodeClaudeMaxProvider(modelId.substring("anthropic/".length))
-		} else if (isOpenAIModel) {
-			const cred = authStorage.get("openai-codex")
-			if (cred?.type === "api_key") {
-				return createOpenAI({ apiKey: cred.key })(
-					modelId.substring("openai/".length),
-				)
-			}
-			if (authStorage.isLoggedIn("openai-codex")) {
-				return openaiCodexProvider(modelId.substring("openai/".length))
-			}
-			return new ModelRouterLanguageModel(modelId)
-		} else {
-			return new ModelRouterLanguageModel(modelId)
-		}
-	}
-
-	function getDynamicModel({
-		requestContext,
-	}: {
-		requestContext: RequestContext
-	}) {
-		const harnessContext = requestContext.get("harness") as
-			| HarnessRequestContext<typeof stateSchema>
-			| undefined
-		const modelId = harnessContext?.state?.currentModelId
-		if (!modelId) {
-			throw new Error("No model selected. Use /models to select a model first.")
-		}
-		return resolveModel(modelId)
-	}
-
-	// Create tools
-	const viewTool = createViewTool(project.rootPath)
-	const executeCommandTool = createExecuteCommandTool(project.rootPath)
-	const grepTool = createGrepTool(project.rootPath)
-	const globTool = createGlobTool(project.rootPath)
-	const writeFileTool = createWriteFileTool(project.rootPath)
-
-	const subagentTool = createSubagentTool({
-		tools: {
-			view: viewTool,
-			search_content: grepTool,
-			find_files: globTool,
-			string_replace_lsp: stringReplaceLspTool,
-			write_file: writeFileTool,
-			execute_command: executeCommandTool,
-		},
-		resolveModel,
-	})
-
-	const subagentToolReadOnly = createSubagentTool({
-		tools: {
-			view: viewTool,
-			search_content: grepTool,
-			find_files: globTool,
-		},
-		resolveModel,
-		allowedAgentTypes: ["explore", "plan"],
-	})
-
-	// Skills
-	const skillsDirs = [
-		path.join(projectPath, ".mastracode", "skills"),
-		path.join(projectPath, ".claude", "skills"),
-		path.join(os.homedir(), ".mastracode", "skills"),
-		path.join(os.homedir(), ".claude", "skills"),
-	]
-	const skillPaths = collectSkillPaths(skillsDirs)
-
-	const workspace = new Workspace({
-		id: "mastra-code-workspace",
-		name: "Mastra Code Workspace",
-		filesystem: new LocalFilesystem({
-			basePath: project.rootPath,
-			contained: false,
-		}),
-		sandbox: new LocalSandbox({
-			workingDirectory: project.rootPath,
-			env: process.env,
-		}),
-		...(skillPaths.length > 0 ? { skills: skillPaths } : {}),
-		tools: { enabled: false },
-	})
-
-	const _mcpManager = new MCPManager(project.rootPath)
-	const _browserManager = new PlaywrightBrowserManager()
-
-	const codeAgent = new Agent({
-		id: "code-agent",
-		name: "Code Agent",
-		instructions: ({ requestContext }) => {
-			const harnessContext = requestContext.get("harness") as
-				| HarnessRequestContext<typeof stateSchema>
-				| undefined
-			const state = harnessContext?.state
-			const modeId = harnessContext?.modeId ?? "build"
-			const promptCtx: PromptContext = {
-				projectPath: state?.projectPath ?? project.rootPath,
-				projectName: state?.projectName ?? project.name,
-				gitBranch: state?.gitBranch ?? project.gitBranch,
-				platform: process.platform,
-				date: new Date().toISOString().split("T")[0],
-				mode: modeId,
-				activePlan: state?.activePlan ?? null,
-				modeId: modeId,
-				currentDate: new Date().toISOString().split("T")[0],
-				workingDir: state?.projectPath ?? project.rootPath,
-				state: state,
-			}
-			return buildFullPrompt(promptCtx)
-		},
-		model: getDynamicModel,
-		memory: getDynamicMemory,
-		workspace: ({ requestContext }) => {
-			const ctx = requestContext.get("harness") as
-				| HarnessRequestContext<typeof stateSchema>
-				| undefined
-			const allowedPaths = ctx?.getState?.()?.sandboxAllowedPaths ?? []
-			if (allowedPaths.length > 0) {
-				const allPaths = [
-					project.rootPath,
-					...allowedPaths.map((p: string) => path.resolve(p)),
-				]
-				const commonRoot = findCommonAncestor(allPaths)
-				return new Workspace({
-					id: "mastra-code-workspace-expanded",
-					name: "Mastra Code Workspace (Expanded)",
-					filesystem: new LocalFilesystem({
-						basePath: commonRoot,
-						contained: false,
-					}),
-					sandbox: new LocalSandbox({
-						workingDirectory: project.rootPath,
-						env: process.env,
-					}),
-					...(skillPaths.length > 0 ? { skills: skillPaths } : {}),
-					tools: { enabled: false },
-				})
-			}
-			return ctx?.workspace ?? workspace
-		},
-		tools: ({ requestContext }) => {
-			const harnessContext = requestContext.get("harness") as
-				| HarnessRequestContext<typeof stateSchema>
-				| undefined
-			const modelId = harnessContext?.state?.currentModelId ?? ""
-			const modeId = harnessContext?.modeId ?? "build"
-			const isAnthropicModel = modelId.startsWith("anthropic/")
-
-			const tools: Record<string, any> = {
-				view: viewTool,
-				search_content: grepTool,
-				find_files: globTool,
-				execute_command: executeCommandTool,
-				subagent: modeId === "plan" ? subagentToolReadOnly : subagentTool,
-				request_sandbox_access: requestSandboxAccessTool,
-			}
-
-			if (modeId !== "plan") {
-				tools.string_replace_lsp = stringReplaceLspTool
-				tools.ast_smart_edit = astSmartEditTool
-				tools.write_file = writeFileTool
-			}
-
-			// Web search: prefer Tavily, fall back to provider-native
-			if (hasTavilyKey()) {
-				const tavily = createWebSearchTool()
-				if (tavily) tools.web_search = tavily
-				const tavilyExtract = createWebExtractTool()
-				if (tavilyExtract) tools.web_extract = tavilyExtract
-			} else if (modelId.startsWith("anthropic/")) {
-				tools.web_search = createAnthropic({}).tools.webSearch_20250305()
-			} else if (modelId.startsWith("openai/")) {
-				tools.web_search = createOpenAI({}).tools.webSearch()
-			} else if (modelId.startsWith("google/")) {
-				tools.web_search = createGoogle({}).tools.googleSearch()
-			}
-
-			// Computer Use: Anthropic-only, backed by headless Playwright browser
-			if (isAnthropicModel && modeId !== "plan") {
-				tools.navigate_browser = createNavigateBrowserTool(_browserManager)
-
-				const cred = authStorage.get("anthropic")
-				const anthropicProvider = createAnthropic({
-					...(cred?.type === "api_key" ? { apiKey: cred.key } : {}),
-				})
-				tools.computer = anthropicProvider.tools.computer_20251124({
-					displayWidthPx: DISPLAY_WIDTH,
-					displayHeightPx: DISPLAY_HEIGHT,
-					execute: async ({ action, coordinate, text, region }) => {
-						const page = await _browserManager.getPage()
-
-						switch (action) {
-							case "screenshot": {
-								const base64 = await _browserManager.screenshot()
-								return { type: "image" as const, data: base64 }
-							}
-							case "left_click": {
-								if (coordinate)
-									await page.mouse.click(coordinate[0], coordinate[1])
-								return `Clicked at (${coordinate?.[0]}, ${coordinate?.[1]})`
-							}
-							case "right_click": {
-								if (coordinate)
-									await page.mouse.click(coordinate[0], coordinate[1], {
-										button: "right",
-									})
-								return `Right-clicked at (${coordinate?.[0]}, ${coordinate?.[1]})`
-							}
-							case "double_click": {
-								if (coordinate)
-									await page.mouse.dblclick(coordinate[0], coordinate[1])
-								return `Double-clicked at (${coordinate?.[0]}, ${coordinate?.[1]})`
-							}
-							case "middle_click": {
-								if (coordinate)
-									await page.mouse.click(coordinate[0], coordinate[1], {
-										button: "middle",
-									})
-								return `Middle-clicked at (${coordinate?.[0]}, ${coordinate?.[1]})`
-							}
-							case "mouse_move": {
-								if (coordinate)
-									await page.mouse.move(coordinate[0], coordinate[1])
-								return `Moved mouse to (${coordinate?.[0]}, ${coordinate?.[1]})`
-							}
-							case "left_click_drag": {
-								if (coordinate) {
-									await page.mouse.down()
-									await page.mouse.move(coordinate[0], coordinate[1])
-									await page.mouse.up()
-								}
-								return `Dragged to (${coordinate?.[0]}, ${coordinate?.[1]})`
-							}
-							case "type": {
-								if (text) await page.keyboard.type(text)
-								return `Typed "${text}"`
-							}
-							case "key": {
-								if (text) {
-									const keyMap: Record<string, string> = {
-										Return: "Enter",
-										BackSpace: "Backspace",
-										space: " ",
-										Tab: "Tab",
-										Escape: "Escape",
-									}
-									const keys = text
-										.split("+")
-										.map((k) => keyMap[k.trim()] ?? k.trim())
-									if (keys.length === 1) {
-										await page.keyboard.press(keys[0])
-									} else {
-										for (let i = 0; i < keys.length - 1; i++) {
-											await page.keyboard.down(keys[i])
-										}
-										await page.keyboard.press(keys[keys.length - 1])
-										for (let i = keys.length - 2; i >= 0; i--) {
-											await page.keyboard.up(keys[i])
-										}
-									}
-								}
-								return `Pressed key "${text}"`
-							}
-							case "cursor_position": {
-								return "Cursor position not tracked in headless mode"
-							}
-							case "scroll": {
-								if (coordinate) {
-									await page.mouse.move(coordinate[0], coordinate[1])
-								}
-								const scrollAmount = 360
-								const direction =
-									text === "down" || text === "right"
-										? scrollAmount
-										: -scrollAmount
-								if (text === "left" || text === "right") {
-									await page.mouse.wheel(direction, 0)
-								} else {
-									await page.mouse.wheel(0, direction)
-								}
-								return `Scrolled ${text}`
-							}
-							case "zoom": {
-								if (region) {
-									const [x1, y1, x2, y2] = region
-									const clip = {
-										x: x1,
-										y: y1,
-										width: x2 - x1,
-										height: y2 - y1,
-									}
-									const buffer = await page.screenshot({
-										type: "jpeg",
-										quality: 55,
-										clip,
-									})
-									return {
-										type: "image" as const,
-										data: buffer.toString("base64"),
-									}
-								}
-								return {
-									type: "image" as const,
-									data: await _browserManager.screenshot(),
-								}
-							}
-							default:
-								return `Unknown action: ${action}`
-						}
-					},
-				})
-
-				// Web fetch — server-side URL fetching via Anthropic
-				tools.web_fetch = anthropicProvider.tools.webFetch_20250910()
-
-				// Code execution — server-side sandboxed execution via Anthropic
-				tools.code_execution = anthropicProvider.tools.codeExecution_20250825()
-			}
-
-			const mcpTools = _mcpManager.getTools()
-			Object.assign(tools, mcpTools)
-
-			return tools
-		},
-	})
-
-	const mastra = new Mastra({
-		storage,
-		logger: false,
-	})
-	codeAgent.__registerMastra(mastra)
-
-	codeAgent.__setLogger(noopLogger)
-
-	const hookManager = new HookManager(project.rootPath, "session-init")
-
-	const _harness = new Harness({
-		id: "mastra-code",
-		resourceId: project.resourceId,
-		storage,
-		stateSchema,
-		initialState: {
-			projectPath: project.rootPath,
-			projectName: project.name,
-			gitBranch: project.gitBranch,
-		},
-		resolveModel: resolveModel as (modelId: string) => MastraLanguageModel,
-		workspace,
-		toolCategoryResolver: (toolName: string) => getToolCategory(toolName),
-		modes: [
-			{
-				id: "build",
-				name: "Build",
-				default: true,
-				defaultModelId: "anthropic/claude-opus-4-6",
-				color: "#7f45e0",
-				agent: codeAgent,
-			},
-			{
-				id: "plan",
-				name: "Plan",
-				defaultModelId: "openai/gpt-5.2-codex",
-				color: "#2563eb",
-				agent: codeAgent,
-			},
-			{
-				id: "fast",
-				name: "Fast",
-				defaultModelId: "cerebras/zai-glm-4.7",
-				color: "#059669",
-				agent: codeAgent,
-			},
-		],
-		modelAuthChecker: (provider: string) => {
-			return authStorage.isLoggedIn(provider) || undefined
-		},
-		omConfig: {
-			defaultObserverModelId: DEFAULT_OM_MODEL_ID,
-			defaultReflectorModelId: DEFAULT_OM_MODEL_ID,
-			defaultObservationThreshold: DEFAULT_OBS_THRESHOLD,
-			defaultReflectionThreshold: DEFAULT_REF_THRESHOLD,
-		},
-	})
-
-	// Sync OM state
-	_harness.subscribe((event) => {
-		if (event.type === "om_model_changed") {
-			if (event.role === "observer") omState.observerModelId = event.modelId
-			if (event.role === "reflector") omState.reflectorModelId = event.modelId
-		} else if (event.type === "thread_changed") {
+	// Hook manager session tracking + OM progress loading
+	harness.subscribe((event: any) => {
+		if (event.type === "thread_changed") {
 			// Close browser when switching threads — browser state is conversation-specific
-			_browserManager.close().catch(() => {})
-			storage
-				.getThreadById({ threadId: event.threadId })
-				.then((thread) => {
-					const meta = thread?.metadata as Record<string, unknown> | undefined
-					if (
-						meta?.observerModelId &&
-						typeof meta.observerModelId === "string"
-					) {
-						omState.observerModelId = meta.observerModelId
-						_harness.setState({
-							observerModelId: meta.observerModelId,
-						})
-					}
-					if (
-						meta?.reflectorModelId &&
-						typeof meta.reflectorModelId === "string"
-					) {
-						omState.reflectorModelId = meta.reflectorModelId
-						_harness.setState({
-							reflectorModelId: meta.reflectorModelId,
-						})
-					}
-				})
-				.catch(() => {
-					omState.observerModelId =
-						_harness.getObserverModelId() ?? DEFAULT_OM_MODEL_ID
-					omState.reflectorModelId =
-						_harness.getReflectorModelId() ?? DEFAULT_OM_MODEL_ID
-				})
-			omState.obsThreshold =
-				_harness.getState().observationThreshold ?? DEFAULT_OBS_THRESHOLD
-			omState.refThreshold =
-				_harness.getState().reflectionThreshold ?? DEFAULT_REF_THRESHOLD
-			hookManager.setSessionId(event.threadId)
-			_harness.loadOMProgress?.().catch(() => {})
+			browserManager.close().catch(() => {})
+			hookManager?.setSessionId(event.threadId)
+			harness.loadOMProgress?.().catch(() => {})
 		} else if (event.type === "thread_created") {
-			hookManager.setSessionId(event.thread.id)
-			_harness.loadOMProgress?.().catch(() => {})
+			hookManager?.setSessionId(event.thread.id)
+			harness.loadOMProgress?.().catch(() => {})
 		} else if (event.type === "agent_end") {
-			_harness.loadOMProgress?.().catch(() => {})
+			harness.loadOMProgress?.().catch(() => {})
 		}
 	})
 
 	// Default to YOLO mode
-	_harness.setState({ yolo: true })
+	await harness.setState({ yolo: true })
 	for (const [category, policy] of Object.entries(YOLO_POLICIES)) {
-		_harness.setPermissionForCategory({
+		harness.setPermissionForCategory({
 			category: category as ToolCategory,
 			policy,
 		})
 	}
 
 	return {
-		harness: _harness,
-		mcpManager: _mcpManager,
-		browserManager: _browserManager,
+		harness,
+		mcpManager,
+		browserManager,
 		resolveModel,
 		authStorage,
+		electronState,
 	}
 }
 
@@ -877,10 +238,10 @@ function bridgeAllEvents(window: BrowserWindow) {
 						// Auto-transition linked Linear issue to "done" state
 						;(async () => {
 							try {
-								const sessionState = session.harness.getState()
-								const linkedIssueId = sessionState?.linkedLinearIssueId ?? ""
-								const doneStateId = sessionState?.linkedLinearDoneStateId ?? ""
-								const apiKey = sessionState?.linearApiKey ?? ""
+								const eState = session.electronState.getState()
+								const linkedIssueId = eState.linkedLinearIssueId
+								const doneStateId = eState.linkedLinearDoneStateId
+								const apiKey = eState.linearApiKey
 								if (linkedIssueId && doneStateId && apiKey) {
 									await fetch("https://api.linear.app/graphql", {
 										method: "POST",
@@ -955,8 +316,8 @@ function cleanupSession(sessionPath: string) {
 		ptySession.kill()
 	}
 	session.ptySessions.clear()
-	session.mcpManager.disconnect().catch(() => {})
-	session.browserManager.close().catch(() => {})
+	session.mcpManager?.disconnect().catch(() => {})
+	session.browserManager?.close().catch(() => {})
 	sessions.delete(sessionPath)
 	sessionTimings.delete(sessionPath)
 }
@@ -1175,6 +536,7 @@ app.whenReady().then(async () => {
 		browserManager: result.browserManager,
 		resolveModel: result.resolveModel,
 		authStorage: result.authStorage,
+		electronState: result.electronState,
 		projectRoot: projectPath,
 		unsubscribe: null,
 		ptySessions: new Map(),
@@ -1196,7 +558,7 @@ app.whenReady().then(async () => {
 	await initialSession.harness.loadOMProgress?.().catch(() => {})
 
 	// Init MCP
-	if (initialSession.mcpManager.hasServers()) {
+	if (initialSession.mcpManager?.hasServers()) {
 		await initialSession.mcpManager.init()
 	}
 
@@ -1234,18 +596,3 @@ app.on("window-all-closed", async () => {
 	}
 	app.quit()
 })
-
-// =============================================================================
-// UPSTREAM TRACKING NOTES
-// =============================================================================
-// The following features exist in this codebase but are NOT part of the published
-// @mastra/core Harness API. They should be proposed upstream:
-//
-// 1. Harness.deleteThread(threadId) — Delete a thread and clear if current.
-//    Currently mocked above (switches away but doesn't delete from storage).
-//
-// 2. HarnessConfig.hookManager — Lifecycle hooks for tool use, message send,
-//    stop, and session events. Currently managed externally.
-//
-// 3. HarnessConfig.mcpManager — MCP server management. Currently managed externally.
-// =============================================================================

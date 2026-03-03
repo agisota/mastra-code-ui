@@ -60,21 +60,21 @@ export function getDashboardHandlers(): Record<string, IpcCommandHandler> {
 					const activeTask = tasks.find((t) => t.status === "in_progress")
 
 					let linkedIssue = null
-					const linearIssueId = (state?.linkedLinearIssueId as string) ?? ""
-					const linearIdentifier =
-						(state?.linkedLinearIssueIdentifier as string) ?? ""
-					if (linearIssueId && linearIdentifier) {
+					const eState = session.electronState.getState()
+					if (
+						eState.linkedLinearIssueId &&
+						eState.linkedLinearIssueIdentifier
+					) {
 						linkedIssue = {
-							id: linearIssueId,
-							identifier: linearIdentifier,
+							id: eState.linkedLinearIssueId,
+							identifier: eState.linkedLinearIssueIdentifier,
 							provider: "linear",
 						}
 					}
-					const ghIssue = (state?.linkedGithubIssueNumber as number) ?? 0
-					if (ghIssue > 0 && !linkedIssue) {
+					if (eState.linkedGithubIssueNumber > 0 && !linkedIssue) {
 						linkedIssue = {
-							id: `gh-${ghIssue}`,
-							identifier: `#${ghIssue}`,
+							id: `gh-${eState.linkedGithubIssueNumber}`,
+							identifier: `#${eState.linkedGithubIssueNumber}`,
 							provider: "github",
 						}
 					}

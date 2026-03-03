@@ -98,7 +98,11 @@ export function getHarnessHandlers(): Record<string, IpcCommandHandler> {
 				}))
 		},
 		getState: async (_command, ctx) => {
-			return ctx.getActiveSession().harness.getState()
+			const session = ctx.getActiveSession()
+			return {
+				...session.harness.getState(),
+				...session.electronState.getState(),
+			}
 		},
 		getSession: async (_command, ctx) => {
 			const h = ctx.getActiveSession().harness

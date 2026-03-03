@@ -392,6 +392,7 @@ export function getProjectHandlers(): Record<string, IpcCommandHandler> {
 				browserManager: result.browserManager,
 				resolveModel: result.resolveModel,
 				authStorage: result.authStorage,
+				electronState: result.electronState,
 				projectRoot: newPath,
 				unsubscribe: null,
 				ptySessions: new Map(),
@@ -405,7 +406,8 @@ export function getProjectHandlers(): Record<string, IpcCommandHandler> {
 				newSession.authStorage,
 			)
 			await newSession.harness.loadOMProgress?.().catch(() => {})
-			if (newSession.mcpManager.hasServers()) await newSession.mcpManager.init()
+			if (newSession.mcpManager?.hasServers())
+				await newSession.mcpManager.init()
 
 			saveRecentProject(newPath, project.name)
 			return { project }

@@ -1,16 +1,16 @@
 import type { BrowserWindow } from "electron"
 import type * as pty from "node-pty"
 import type { Harness } from "@mastra/core/harness"
-import type { AuthStorage } from "../../auth/storage.js"
-import type { MCPManager } from "../../mcp/index.js"
+import type { ElectronStateManager } from "../electron-state.js"
 import type { PlaywrightBrowserManager } from "../../browser/playwright-manager.js"
 
 export interface WorktreeSession {
 	harness: Harness<any>
-	mcpManager: MCPManager
+	mcpManager: any
 	browserManager: PlaywrightBrowserManager
 	resolveModel: (modelId: string) => any
-	authStorage: AuthStorage
+	authStorage: any
+	electronState: ElectronStateManager
 	projectRoot: string
 	unsubscribe: (() => void) | null
 	ptySessions: Map<string, pty.IPty>
@@ -38,15 +38,13 @@ export interface HandlerContext {
 	bridgeAllEvents: (window: BrowserWindow) => void
 	createHarness: (path: string) => Promise<{
 		harness: Harness<any>
-		mcpManager: MCPManager
+		mcpManager: any
 		browserManager: PlaywrightBrowserManager
 		resolveModel: (modelId: string) => any
-		authStorage: AuthStorage
+		authStorage: any
+		electronState: ElectronStateManager
 	}>
-	ensureAuthenticatedModel: (
-		h: Harness<any>,
-		authStorage: AuthStorage,
-	) => Promise<void>
+	ensureAuthenticatedModel: (h: Harness<any>, authStorage: any) => Promise<void>
 	generateThreadTitle: (
 		h: Harness<any>,
 		userMessage: string,
