@@ -4,7 +4,7 @@ This document catalogues functionality needed by the Electron app that is missin
 under-typed in the published `Harness` from `@mastra/core/harness`. Each item describes
 the current workaround and the ideal upstream API.
 
-**Last updated:** Upgraded to `@mastra/core@1.8.0` — 12 of 16 gaps resolved.
+**Last updated:** Upgraded to `@mastra/core@1.9.0` + `mastracode@0.5.1` — 15 of 17 gaps resolved.
 
 ---
 
@@ -181,97 +181,61 @@ Tool return types are now consistent.
 
 ---
 
-## 17. `getTokenUsage()` Returns Zeros — AI SDK v6 Field Name Mismatch — FIXED (unreleased)
+## ~~17. `getTokenUsage()` Returns Zeros — AI SDK v6 Field Name Mismatch~~ — RESOLVED in 1.9.0
 
-**File:** `node_modules/@mastra/core/dist/harness/index.js` (line 1614–1626)
-
-The harness's `step-finish` handler reads `usage.promptTokens` and `usage.completionTokens`,
-but AI SDK v6 (`ai@6.x`) provides `usage.inputTokens` and `usage.outputTokens`. The old
-field names are `undefined`, so `?? 0` kicks in and tokens are always 0. The `usage_update`
-event fires (the `usage` object is truthy) but with `{ promptTokens: 0, completionTokens: 0, totalTokens: 0 }`.
-
-The TUI never hits this because it doesn't display per-message token counts — it only shows
-OM progress from `om_status` events.
-
-**Status:** A PR has been merged upstream to fix this, but the fix has not been included in a
-published release yet. Still broken in `@mastra/core@1.8.0`. Update to the next release when
-available.
-
-**Workaround:** None in stable. The `0.0.0-harness-token-count-*` prerelease contained the
-fix but is not suitable for long-term use.
-
-**Ideal fix:**
-
-```ts
-// In step-finish handler, read both old and new field names:
-const promptTokens = usage.promptTokens ?? usage.inputTokens ?? 0
-const completionTokens = usage.completionTokens ?? usage.outputTokens ?? 0
-```
-
-Or use the AI SDK's `totalTokens` field which IS present and correct:
-
-```ts
-const totalTokens = usage.totalTokens ?? promptTokens + completionTokens
-```
+The harness's `step-finish` handler now reads both old and new field names:
+`usage.promptTokens ?? usage.inputTokens ?? 0` and
+`usage.completionTokens ?? usage.outputTokens ?? 0`. Token counts are now correct.
 
 ---
 
-## 18. `createMastraCode` Does Not Export `resolveModel` — FIXED (unreleased)
+## ~~18. `createMastraCode` Does Not Export `resolveModel`~~ — RESOLVED in mastracode 0.5.0
 
-**Files:** `src/electron/main.ts`, `src/electron/helpers.ts`
+`createMastraCode()` now includes `resolveModel` in its return value. The local workaround
+(`createAnthropic({})`, `createOpenAI({})`, `ModelRouterLanguageModel`) has been removed from
+`main.ts`. Thread title generation now uses the fully-authenticated model resolver.
 
-`createMastraCode()` internalizes its `resolveModel` function (which handles Claude Max auth
-via `opencodeClaudeMaxProvider`, Codex auth via `openaiCodexProvider`, Moonshot, and generic
-routing) but does not include it in the return value. The Electron app needs `resolveModel`
-for `generateThreadTitle` — a lightweight `generateText()` call to produce thread titles.
+---
 
-The local workaround creates bare AI SDK instances (`createAnthropic({})`, `createOpenAI({})`)
-without auth credentials, so the `generateText()` call fails silently and threads stay
-titled "New Thread".
+## ~~19. `createMastraCode` Does Not Support `extraTools` at Runtime~~ — RESOLVED in mastracode 0.5.0
 
-**Status:** A PR has been merged upstream to export `resolveModel` from `createMastraCode`,
-but the fix has not been included in a published release yet. Still broken in `mastracode@0.4.0`.
+`extraTools` is now properly wired through the tool resolution pipeline. Accepts either a
+static `Record<string, any>` or a dynamic function `({ requestContext }) => Record<string, any>`.
+Custom tools are merged into the dynamic tool set alongside built-in and MCP tools.
 
-**Workaround:** Local `resolveModel` in `main.ts` (lines 78–85) that creates unauthenticated
-SDK instances. Title generation fails when using Claude Max or Codex auth flows.
+---
 
-**Ideal fix:**
+## 20. `opencodeClaudeMaxProvider` OAuth Fetch Overwrites SDK Headers — OPEN (patched locally)
 
-```ts
-// createMastraCode return value should include resolveModel:
-return {
-	harness,
-	mcpManager,
-	hookManager,
-	authStorage,
-	resolveModel,
-	storageWarning,
+**File:** `mastracode/dist/chunk-JI4M5525.js` (ESM), `chunk-AJEYT7X3.cjs` (CJS)
+
+The OAuth custom `fetch` in `opencodeClaudeMaxProvider` replaces `init.headers` entirely
+with hardcoded headers:
+
+```js
+headers: {
+  Authorization: `Bearer ${accessToken}`,
+  "anthropic-beta": "oauth-2025-04-20,...",
+  "anthropic-version": "2023-06-01"
 }
 ```
 
-Once released, the local `resolveModel` copy and its imports (`createAnthropic`, `createOpenAI`,
-`ModelRouterLanguageModel`) can be removed from `main.ts`.
+This drops any `anthropic-beta` values that the AI SDK dynamically adds via `prepareTools()`
+(e.g. `computer-use-2025-11-24` for computer use tools). The result: provider-defined tools
+like `computer_20251124` are sent in the API request body but the required beta header is
+missing, causing the API to reject the tool type.
 
----
+**Workaround:** pnpm patch that merges the SDK's `anthropic-beta` header with the OAuth betas:
 
-## 19. `createMastraCode` Does Not Support `extraTools` at Runtime — FIXED (unreleased)
+```js
+const sdkBeta = init?.headers?.["anthropic-beta"] || ""
+const oauthBeta = "oauth-2025-04-20,..."
+const mergedBeta = sdkBeta ? `${oauthBeta},${sdkBeta}` : oauthBeta
+```
 
-**Files:** `src/electron/main.ts`
-
-`MastraCodeConfig` declares an `extraTools` field for injecting additional tools (e.g.
-browser tools, custom Electron tools) into the agent's tool set. The config type accepts it,
-but the internal wiring does not merge `extraTools` into the dynamic tool function at runtime.
-Custom tools passed via `extraTools` are silently ignored.
-
-**Status:** A PR has been merged upstream to wire `extraTools` through the tool resolution
-pipeline, but the fix has not been included in a published release yet. Still broken in
-`mastracode@0.4.0`.
-
-**Workaround:** Tools are injected by patching the harness's tool set after creation, or by
-using `HarnessConfig.tools` directly when not using `createMastraCode`.
-
-**Ideal fix:** `extraTools` from config should be merged into the dynamic tool function
-alongside built-in and MCP tools.
+**Ideal fix:** The OAuth fetch should merge `init.headers["anthropic-beta"]` with its own
+beta list instead of replacing it. This affects any provider-defined tool that requires a
+beta header (computer use, code execution, web fetch, etc.).
 
 ---
 
@@ -280,10 +244,10 @@ alongside built-in and MCP tools.
 | Status   | Items                                | Notes                                                                      |
 | -------- | ------------------------------------ | -------------------------------------------------------------------------- |
 | RESOLVED | 2, 3, 4, 5, 6, 7, 11, 12, 13, 15, 16 | Fixed by `@mastra/core@1.8.0` typed APIs; 11 resolved via `tools` function |
+| RESOLVED | 17                                   | Token usage field mismatch fixed in `@mastra/core@1.9.0`                   |
+| RESOLVED | 18, 19                               | `resolveModel` export + `extraTools` wiring fixed in `mastracode@0.5.0`    |
 | PARTIAL  | 8                                    | Targeted cast replaces `as any`                                            |
 | OPEN     | 1                                    | `deleteThread` still missing                                               |
 | OPEN     | 9, 10                                | Config extensibility (hookManager, mcpManager)                             |
 | OPEN     | 14                                   | Auth integration (intentionally external)                                  |
-| FIXED\*  | 17                                   | Token usage field mismatch; PR merged, not released                        |
-| FIXED\*  | 18                                   | `resolveModel` not exported; PR merged, not released                       |
-| FIXED\*  | 19                                   | `extraTools` not wired; PR merged, not released                            |
+| OPEN     | 20                                   | OAuth fetch drops SDK beta headers (patched locally)                       |

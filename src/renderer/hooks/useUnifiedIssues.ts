@@ -242,6 +242,7 @@ export function useUnifiedIssues(params: {
 		sourceFilter,
 		workspaceFilter,
 		toggleSourceFilter,
+		setSourceFilter,
 		setWorkspaceFilter,
 	}
 }

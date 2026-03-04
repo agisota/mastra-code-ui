@@ -15,7 +15,7 @@ export function getHarnessHandlers(): Record<string, IpcCommandHandler> {
 			const threadBefore = h.getCurrentThreadId()
 			h.sendMessage({
 				content: command.content,
-				...(command.images ? { images: command.images } : {}),
+				...(command.images ? { files: command.images } : {}),
 			})
 				.then(async () => {
 					const threadAfter = h.getCurrentThreadId()

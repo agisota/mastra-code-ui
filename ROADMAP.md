@@ -15,7 +15,7 @@ Run multiple coding agents simultaneously, each in an isolated Git worktree.
 - [x] **Agent dashboard** — Bird's-eye view of all running agents: status, current task, branch, token usage _(AgentDashboard component with summary bar, per-agent cards showing status/branch/task/tokens/cost/duration/model, 3s polling, click-to-switch; "Agents" nav button in sidebar with active count badge; `getAgentDashboardData` IPC handler aggregating all sessions)_
 - [ ] **Wire subagents through Harness config** — Use `HarnessConfig.subagents` and the built-in subagent tool instead of manual tool creation
 - [x] **Agent notifications** — Desktop notifications when an agent finishes, errors, or needs approval _(desktop `Notification` API, dock badge, in-app bell, and sound all implemented; configurable via Settings)_
-- [-] **Agent cost tracking** — Per-agent token usage and cost breakdown across parallel sessions _(cost estimation with static model pricing table, per-agent and global totals displayed in Agent Dashboard; token values depend on upstream `getTokenUsage()` fix landing)_
+- [x] **Agent cost tracking** — Per-agent token usage and cost breakdown across parallel sessions _(cost estimation with static model pricing table, per-agent and global totals displayed in Agent Dashboard; token values now correct after `getTokenUsage()` fix in `@mastra/core@1.9.0`)_
 
 ## Diff Viewer & Code Review
 
@@ -51,9 +51,9 @@ Tracked in [UPSTREAM_HARNESS_GAPS.md](./UPSTREAM_HARNESS_GAPS.md). Key items:
 - [ ] `HarnessConfig.hookManager` — Pass hook manager through config instead of external wiring
 - [ ] `HarnessConfig.mcpManager` — Pass MCP manager through config instead of ad-hoc tool injection
 - [x] ~~`HarnessConfig.getToolsets`~~ — Provider-native web search now passed directly via `tools` function (Anthropic, OpenAI, Google fallback cascade); no `getToolsets` config needed
-- [-] `getTokenUsage()` returns zeros — AI SDK v6 field name mismatch; PR merged upstream but not yet released
-- [-] `createMastraCode` does not export `resolveModel` — breaks thread title generation when using Claude Max / Codex auth; PR merged upstream but not yet released
-- [-] `createMastraCode` does not wire `extraTools` at runtime — custom tools passed via config are silently ignored; PR merged upstream but not yet released
+- [x] ~~`getTokenUsage()` returns zeros~~ — AI SDK v6 field name mismatch fixed in `@mastra/core@1.9.0`
+- [x] ~~`createMastraCode` does not export `resolveModel`~~ — fixed in `mastracode@0.5.0`; local workaround removed
+- [x] ~~`createMastraCode` does not wire `extraTools` at runtime~~ — fixed in `mastracode@0.5.0`; supports static and dynamic tool injection
 
 ## Task & Context Management
 

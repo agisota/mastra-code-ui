@@ -15,12 +15,12 @@ import * as fs from "fs"
 import { fileURLToPath } from "url"
 import * as pty from "node-pty"
 
-import { createAnthropic } from "@ai-sdk/anthropic"
-import { createOpenAI } from "@ai-sdk/openai"
-import { ModelRouterLanguageModel } from "@mastra/core/llm"
-
 import { createMastraCode } from "mastracode"
 
+import {
+	createNavigateBrowserTool,
+	createComputerUseTool,
+} from "../tools/index.js"
 import { getAppDataDir } from "../utils/project.js"
 import {
 	getToolCategory,
@@ -71,25 +71,21 @@ const sessionTimings = new Map<string, AgentTiming>()
 // =============================================================================
 
 // =============================================================================
-// Lightweight resolveModel — needed for generateThreadTitle.
-// createMastraCode handles the full model resolution internally but doesn't
-// expose it, so we keep a minimal version for the one call site that needs it.
-// =============================================================================
-function resolveModel(modelId: string) {
-	if (modelId.startsWith("anthropic/")) {
-		return createAnthropic({})(modelId.substring("anthropic/".length))
-	} else if (modelId.startsWith("openai/")) {
-		return createOpenAI({})(modelId.substring("openai/".length))
-	}
-	return new ModelRouterLanguageModel(modelId)
-}
-
-// =============================================================================
 // Create Harness via createMastraCode
 // =============================================================================
 async function createHarness(projectPath: string) {
-	const { harness, mcpManager, hookManager, storageWarning } =
-		await createMastraCode({ cwd: projectPath })
+	const browserManager = new PlaywrightBrowserManager()
+	const navigateBrowserTool = createNavigateBrowserTool(browserManager)
+	const computerUseTool = createComputerUseTool(browserManager)
+
+	const { harness, mcpManager, hookManager, resolveModel, storageWarning } =
+		await createMastraCode({
+			cwd: projectPath,
+			extraTools: {
+				"navigate-browser": navigateBrowserTool,
+				computer: computerUseTool,
+			},
+		})
 
 	if (storageWarning) {
 		console.warn("[storage]", storageWarning)
@@ -100,8 +96,6 @@ async function createHarness(projectPath: string) {
 	// Both read/write the same auth.json file so credentials stay in sync.
 	const authStorage = new AuthStorage()
 	const electronState = new ElectronStateManager()
-
-	const browserManager = new PlaywrightBrowserManager()
 
 	// Hook manager session tracking + OM progress loading
 	harness.subscribe((event: any) => {
